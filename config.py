@@ -1,5 +1,9 @@
 import discord
 
-TOKEN = 'MTI0NzI4MjkwMzE5NzU1Mjc1Mg.GhKG2o.W1Wxsxej28CGShVegezbF_Qy0AfrjfQ74ol_L4'
+# Insert here your discord bot token
+TOKEN = ''
 PREFIX = "!"
-GUILD_ID = discord.Object(id=1247283013998612562)
+# Insert here your testing server id
+# Useful for testing as the slash commands usually update every hour,
+# but you can bypass that by specifying the server you're working on.
+GUILD_ID = discord.Object(id=00000000000000000)

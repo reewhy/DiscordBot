@@ -12,11 +12,12 @@ logger = Logger(os.path.basename(__file__).replace(".py", ""))
 intents = discord.Intents.default()
 intents.message_content = True
 
-class CatWizard(commands.Bot):
+class DiscordBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=config.PREFIX, intents=intents)
 
     async def setup_hook(self):
+        # List here all your cogs, they will be automatically loaded
         initial_extensions = ['cogs.fun']
         for ext in initial_extensions:
             try:
@@ -31,7 +32,7 @@ class CatWizard(commands.Bot):
         except Exception as e:
             logger.error("Failed to sync slash commands", exc_info=e)
 
-bot = CatWizard()
+bot = DiscordBot()
 
 @bot.event
 async def on_ready():
@@ -39,6 +40,7 @@ async def on_ready():
     logger.info(f"Connected to {len(bot.guilds)} guild(s)")
 
     try:
+        # Setup here your custom presence on ready
         await bot.change_presence(
             status = discord.Status.online,
             activity=discord.Game(name="witchcraft")
