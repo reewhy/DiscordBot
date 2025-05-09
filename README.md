@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Discord Bot Template
 
 Ready to use template to create a bot using [discord.py](https://github.com/Rapptz/discord.py) with slash commands.
@@ -20,3 +21,7 @@ Ready to use template to create a bot using [discord.py](https://github.com/Rapp
 - Implement database interaction
 - Fix the requirements.txt
 - Improve code explaination
+=======
+# DiscordBot
+Template for discord bot implementing slash commands
+>>>>>>> b9eb8de3127e6892af185f8ed8c37fa4bb294fa8
