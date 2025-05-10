@@ -18,7 +18,7 @@ class DiscordBot(commands.Bot):
 
     async def setup_hook(self):
         # List here all your cogs, they will be automatically loaded
-        initial_extensions = ['cogs.fun']
+        initial_extensions = ['cogs.basic', 'cogs.group_commands']
         for ext in initial_extensions:
             try:
                 await self.load_extension(ext)
