@@ -68,21 +68,20 @@ class RockPaperScissor(app_commands.Group):
         await send_result(x, interaction)
 
 # All cogs need to inherit the class commands.Cog
-class Fun(commands.Cog):
+class GroupCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         # Add a group of commands
         self.bot.tree.add_command(RockPaperScissor())
     
     # This line sets a name for a command and its description
-    @app_commands.command(name="dice", description="Rolls a 6-sided die.")
+    @app_commands.command(name="hi", description="Rolls a 6-sided die.")
     # With this function you're able to describe each parameter in your command
     @app_commands.describe(minimum = "Minimun rollable number", maximum="Maximum rollable number.")
     # Specify in which server you want to activate your bot
     @app_commands.guilds(GUILD_ID)
-    async def dice(self, interaction: discord.Interaction, minimum: int = 1, maximum: int = 6):
-        result = random.randint(minimum, maximum)
-        await interaction.response.send_message(f"You rolled a {result}!")
+    async def hi(self, interaction: discord.Interaction, msg: str = ""):
+        await interaction.response.send_message(f"Hello, {msg}!")
 
 async def setup(bot):
-    await bot.add_cog(Fun(bot))
+    await bot.add_cog(GroupCommands(bot))
