@@ -1,1 +1,29 @@
+# Ignore the config file
 config.py
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+
+# VSCode settings
+.vscode/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# IDE files
+.idea/
+*.iml
+
+# Python cache and test results
+.cache/
+.pytest_cache/
+

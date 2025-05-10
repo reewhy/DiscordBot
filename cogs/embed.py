@@ -7,7 +7,6 @@ from discord import app_commands
 from config import GUILD_ID
 from utils.debug import Logger
 
-<<<<<<< HEAD
 
 import os
 
