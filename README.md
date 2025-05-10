@@ -7,6 +7,7 @@ Ready to use template to create a bot using [discord.py](https://github.com/Rapp
 - Example usage of cogs
 - Implementation of commands groups
 - Easy-to-use logger for CLI
+- Fully working basic level system with admin commands to manage users' info
 
 ## How to use
 1. Clone the repository
@@ -17,6 +18,5 @@ Ready to use template to create a bot using [discord.py](https://github.com/Rapp
 ## To-do
 - Add more discord.py feature
 - Create a new file for each feature
-- Implement database interaction
 - Fix the requirements.txt
 - Improve code explaination
