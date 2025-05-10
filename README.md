@@ -23,3 +23,4 @@ Ready to use template to create a bot using [discord.py](https://github.com/Rapp
 - Moderation system
 - Self-roles
 - Auto-roles
+- Test
