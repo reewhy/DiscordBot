@@ -20,3 +20,5 @@ Ready to use template to create a bot using [discord.py](https://github.com/Rapp
 - Create a new file for each feature
 - Fix the requirements.txt
 - Improve code explaination
+- Moderation system
+- Self-roles
