@@ -7,12 +7,14 @@ from discord import app_commands
 from config import GUILD_ID
 from utils.debug import Logger
 
+<<<<<<< HEAD
 
 import os
 
 from utils.embed_factory import EmbedFactory
 
 logger = Logger(os.path.basename(__file__).replace(".py",""))
+
 
 # All cogs need to inherit the class commands.Cog
 class EmbedAnswer(commands.Cog):
@@ -25,6 +27,7 @@ class EmbedAnswer(commands.Cog):
     @app_commands.describe(
         title="Title of the embed.",
         description="Description of the embed.",
+
     )
     # Specify in which server you want to activate your bot
     @app_commands.guilds(GUILD_ID)

@@ -6,26 +6,36 @@ from config import GUILD_ID
 from utils.debug import Logger
 import os
 
+<<<<<<< HEAD
 from utils.embed_factory import EmbedFactory
 
+=======
+>>>>>>> e82461cfcd6e0033cce26ce7be5751c1c42ec211
 # Initilize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
 intents = discord.Intents.default()
 intents.message_content = True
 
+<<<<<<< HEAD
 initial_extensions = [
     "cogs.basic",
     "cogs.embed",
     "cogs.group_commands"
 ]
 
+=======
+>>>>>>> e82461cfcd6e0033cce26ce7be5751c1c42ec211
 class DiscordBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=config.PREFIX, intents=intents)
 
     async def setup_hook(self):
         # List here all your cogs, they will be automatically loaded
+<<<<<<< HEAD
+=======
+        initial_extensions = ['cogs.basic', 'cogs.group_commands']
+>>>>>>> e82461cfcd6e0033cce26ce7be5751c1c42ec211
         for ext in initial_extensions:
             try:
                 await self.load_extension(ext)
@@ -40,7 +50,10 @@ class DiscordBot(commands.Bot):
             logger.error("Failed to sync slash commands", exc_info=e)
 
 bot = DiscordBot()
+<<<<<<< HEAD
 channel = None
+=======
+>>>>>>> e82461cfcd6e0033cce26ce7be5751c1c42ec211
 
 @bot.event
 async def on_ready():
@@ -54,6 +67,7 @@ async def on_ready():
             activity=discord.Game(name="witchcraft")
         )
         logger.info("Presence updated successfully")
+<<<<<<< HEAD
 
         bot.announce_channel = bot.get_channel(1247283014480691272)
 
@@ -65,6 +79,8 @@ async def on_ready():
         )
 
         await bot.announce_channel.send(embed=embed)
+=======
+>>>>>>> e82461cfcd6e0033cce26ce7be5751c1c42ec211
     except Exception as e:
         logger.error("Failed to update presence", exc_info=e)
 
@@ -76,6 +92,7 @@ async def main():
             await bot.start(config.TOKEN)
     except KeyboardInterrupt:
         logger.info("Received KeyboardInterrupt, shutting down...")
+<<<<<<< HEAD
 
         
     except Exception as e:
@@ -91,6 +108,12 @@ async def main():
         await bot.announce_channel.send(embed=embed)
         logger.info("Bot has shut down!")
         
+=======
+    except Exception as e:
+        logger.critical("Bot crashed!", exc_info=e)
+    finally:
+        logger.info("Bot has shut down!")
+>>>>>>> e82461cfcd6e0033cce26ce7be5751c1c42ec211
 
 
 if __name__ == "__main__":
