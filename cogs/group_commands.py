@@ -75,9 +75,9 @@ class GroupCommands(commands.Cog):
         self.bot.tree.add_command(RockPaperScissor())
     
     # This line sets a name for a command and its description
-    @app_commands.command(name="hi", description="Rolls a 6-sided die.")
+    @app_commands.command(name="hi", description="Send a message from the bot.")
     # With this function you're able to describe each parameter in your command
-    @app_commands.describe(minimum = "Minimun rollable number", maximum="Maximum rollable number.")
+    @app_commands.describe(msg = "Message to send.")
     # Specify in which server you want to activate your bot
     @app_commands.guilds(GUILD_ID)
     async def hi(self, interaction: discord.Interaction, msg: str = ""):
