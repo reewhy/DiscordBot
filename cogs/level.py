@@ -1,6 +1,4 @@
-from dis import disco
-import dis
-from enum import member
+
 import discord
 from discord import app_commands, permissions
 from discord.ext import commands
