@@ -27,7 +27,8 @@ initial_extensions = [
     "cogs.basic",
     "cogs.embed",
     "cogs.group_commands",
-    "cogs.test"
+    "cogs.test",
+    "cogs.moderation"
 ]
 class DiscordBot(commands.Bot):
     def __init__(self):
