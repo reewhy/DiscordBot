@@ -111,7 +111,7 @@ class LevelSystem:
         self.conn.commit()
         cursor.close()
 
-        return new_level
+        return xp, new_level
 
     def add_levels(self, user_id, guild_id, amount):
         """
@@ -146,7 +146,7 @@ class LevelSystem:
         self.conn.commit()
         cursor.close()
 
-        return level
+        return xp, level
 
     def set_level(self, user_id, guild_id, value):
         """
@@ -179,7 +179,7 @@ class LevelSystem:
         self.conn.commit()
         cursor.close()
 
-        return value
+        return xp, value
 
     def set_xp(self, user_id, guild_id, value):
         """
@@ -212,7 +212,7 @@ class LevelSystem:
         self.conn.commit()
         cursor.close()
 
-        return value
+        return value, level
 
     def reset_level(self, user_id, guild_id):
         """

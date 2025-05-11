@@ -84,7 +84,7 @@ class DiscordBot(commands.Bot):
         if message.author.bot:
             return
         
-        level = level_system.add_xp(message.author.id, message.guild.id, amount=10)
+        _, level = level_system.add_xp(message.author.id, message.guild.id, amount=10)
         xp, user_level = level_system.get_user(message.author.id, message.guild.id)
 
         if xp == 0:
