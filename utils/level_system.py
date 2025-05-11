@@ -2,23 +2,25 @@ import mysql.connector
 
 class LevelSystem:
     """
-    Communication with MySQL database for level management.
+    A system to manage user levels and experience points (XP) in a Discord server using a MySQL database.
+
+    This class handles communication with a MySQL database to manage user XP and levels within a specified Discord guild.
+    It supports functionality such as adding XP, setting levels, and resetting user data.
 
     Attributes:
-        host (str): Database server hostname,
-        user (str): Database server username,
-        password (str): The amount of cats you want /ᐠ˵- ⩊ -˵マ.
-        database (str): Database name in the server.
+        conn (mysql.connector.connection.MySQLConnection): The MySQL database connection object.
     """
     def __init__(self, host, user, password, database):
         """
-        Initialize the level system and connects to the database.
+        Initializes the LevelSystem instance and establishes a connection to the MySQL database.
 
         Args:
-            host (str): Database server hostname.
-            user (str): Database server username.
-            password (str): The amount of cats you want /ᐠ˵- ⩊ -˵マ.
-            database (str): Database name in the server.
+            host (str): The hostname or IP address of the MySQL server.
+            user (str): The username for authenticating with the MySQL server.
+            password (str): The password for authenticating with the MySQL server.
+            database (str): The name of the database to connect to.
+
+        This constructor also creates the necessary table in the database if it doesn't exist already.
         """
         self.conn = mysql.connector.connect(
             host=host,
@@ -30,20 +32,16 @@ class LevelSystem:
 
     def create_table(self):
         """
-        Creates the table if it doesn't exist
+        Creates the `levels` table in the database if it doesn't already exist.
 
-        Database structure:
-            
-        +------------+--------+-------+
-        | Field Name |  Type  | Extra |
-        +------------+--------+-------+
-        | user_id    | BIGINT | {PK}  |
-        | guild_id   | BIGINT | {PK}  |
-        | XP         | INT    |       |
-        | level      | INT    |       |
-        +------------+--------+-------+
+        This table stores user data for level management, including:
+        - user_id: The unique ID of the user.
+        - guild_id: The ID of the Discord guild (server) where the user is active.
+        - xp: The experience points (XP) of the user.
+        - level: The level of the user.
 
-
+        Returns:
+            None
         """
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -54,21 +52,19 @@ class LevelSystem:
                         level INT DEFAULT 0,
                         PRIMARY KEY(user_id, guild_id)
                     )
-                        
                        """)
         cursor.close()
 
     def get_user(self, user_id, guild_id):
         """
-        Get user from database.
+        Retrieves the XP and level of a user from the database.
 
         Args:
-            user_id (int): User uinque identifier.
-            guild_id (int): Server ID.
+            user_id (int): The unique ID of the user.
+            guild_id (int): The ID of the guild (Discord server) where the user is active.
 
         Returns:
-            xp (int): User's XP.
-            level (int): User's level
+            tuple: A tuple containing the user's XP and level, or `None` if the user doesn't exist in the database.
         """
         cursor = self.conn.cursor()
         cursor.execute("SELECT xp, level FROM levels WHERE user_id = %s AND guild_id = %s", (user_id, guild_id))
@@ -78,31 +74,33 @@ class LevelSystem:
 
     def add_xp(self, user_id, guild_id, amount):
         """
-        Add XP to user.
+        Adds experience points (XP) to a user's current total and levels them up if necessary.
 
         Args:
-            user_id (int): User identifier.
-            guild_id (int): Server id.
-            amount (int): Amount of XP to add.
+            user_id (int): The unique ID of the user.
+            guild_id (int): The ID of the guild (Discord server) where the user is active.
+            amount (int): The amount of XP to add to the user's total.
 
         Returns:
-            int: New level reached by user.
+            int: The new level of the user after the XP is added.
         """
         user = self.get_user(user_id, guild_id)
-        # Create an user if it didn't exist before
+        
+        # If the user doesn't exist in the database, create a new entry with the given XP.
         if user is None:
             cursor = self.conn.cursor()
             cursor.execute("INSERT INTO levels (user_id, guild_id, xp) VALUES (%s, %s, %s)", (user_id, guild_id, amount))
             self.conn.commit()
             cursor.close()
-            return 1
+            return 1  # The user starts at level 1
         
         xp, level = user
         xp += amount
         new_level = level
 
+        # Check if the XP exceeds the threshold for leveling up.
         if xp >= level * 100:
-            xp = 0
+            xp = 0  # Reset XP after leveling up.
             new_level += 1
 
         cursor = self.conn.cursor()
@@ -117,24 +115,25 @@ class LevelSystem:
 
     def add_levels(self, user_id, guild_id, amount):
         """
-        Add levels to user.
+        Adds a specified number of levels directly to a user's current level.
 
         Args:
-            user_id (int): User identifier.
-            guild_id (int): Server id.
-            amount (int): Amount of levels to add.
+            user_id (int): The unique ID of the user.
+            guild_id (int): The ID of the guild (Discord server) where the user is active.
+            amount (int): The number of levels to add to the user's current level.
 
         Returns:
-            int: New user's level.
+            int: The new level of the user after the levels are added.
         """
         user = self.get_user(user_id, guild_id)
-        # Create an user if it didn't exist before
+        
+        # If the user doesn't exist in the database, create a new entry with the specified level.
         if user is None:
             cursor = self.conn.cursor()
             cursor.execute("INSERT INTO levels (user_id, guild_id, level) VALUES (%s, %s, %s)", (user_id, guild_id, amount))
             self.conn.commit()
             cursor.close()
-            return 1
+            return amount  # The user starts at the specified level
         
         xp, level = user
         level += amount
@@ -149,28 +148,28 @@ class LevelSystem:
 
         return level
 
-
     def set_level(self, user_id, guild_id, value):
         """
-        Set user's level
+        Sets a specific level for a user in the database.
 
         Args:
-            user_id (int): User identifier.
-            guild_id (int): Server ID.
-            value (int): New value for user's level.
+            user_id (int): The unique ID of the user.
+            guild_id (int): The ID of the guild (Discord server) where the user is active.
+            value (int): The level to set for the user.
 
         Returns:
-            int: New user level.
+            int: The new level of the user.
         """
         user = self.get_user(user_id, guild_id)
+        
         if user is None:
             cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO levels (user_id, guild_id, level) VALUES (%s, %s, %s)", (user_id,  guild_id, value))
+            cursor.execute("INSERT INTO levels (user_id, guild_id, level) VALUES (%s, %s, %s)", (user_id, guild_id, value))
             self.conn.commit()
             cursor.close()
-            return 1
+            return value  # The user starts at the specified level
         
-        xp, level = user
+        xp, _ = user
         
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -184,25 +183,26 @@ class LevelSystem:
 
     def set_xp(self, user_id, guild_id, value):
         """
-        Set user's XP.
+        Sets a specific amount of XP for a user in the database.
 
         Args:
-            user_id (int): User identifier.
-            guild_id (int): Server ID.
-            value (int): New value for user's XP.
+            user_id (int): The unique ID of the user.
+            guild_id (int): The ID of the guild (Discord server) where the user is active.
+            value (int): The amount of XP to set for the user.
 
         Returns:
-            int: New user's XP.
+            int: The new XP value for the user.
         """
         user = self.get_user(user_id, guild_id)
+        
         if user is None:
             cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO levels (user_id, guild_id, xp) VALUES (%s, %s, %s)", (user_id,  guild_id, value))
+            cursor.execute("INSERT INTO levels (user_id, guild_id, xp) VALUES (%s, %s, %s)", (user_id, guild_id, value))
             self.conn.commit()
             cursor.close()
-            return 1
+            return value  # The user starts with the specified XP
         
-        xp, level = user
+        level, _ = user
         
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -216,19 +216,20 @@ class LevelSystem:
 
     def reset_level(self, user_id, guild_id):
         """
-        Reset a user
+        Resets a user's level and XP by removing their entry from the database.
 
         Args:
-            user_id (int): User identifier.
-            guild_id (int): Server ID.
+            user_id (int): The unique ID of the user.
+            guild_id (int): The ID of the guild (Discord server) where the user is active.
 
         Returns:
-            bool: if true it's a success, if false the user doesn't exist yet.
+            bool: `True` if the user was successfully reset (removed from the database), `False` if the user doesn't exist.
         """
         user = self.get_user(user_id, guild_id)
 
         if user is None:
-            return False
+            return False  # User does not exist
+        
         cursor = self.conn.cursor()
         cursor.execute("""
                 DELETE FROM levels WHERE user_id = %s AND guild_id = %s
@@ -238,4 +239,3 @@ class LevelSystem:
         cursor.close()
 
         return True
-
