@@ -54,7 +54,7 @@ class Moderation(commands.Cog):
         self.db = ModerationSystem(
             host="localhost",
             user="root",
-            password="",
+            password="luca",
             database="discordbot"
         )
         self.next_unban_time = None
@@ -252,6 +252,39 @@ class Moderation(commands.Cog):
         embed.add_field(name="Reason", value=reason)
 
         await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="delete", description="Delete messages.")
+    @app_commands.describe(number="Number of messages to be deleted", member="User")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guilds(GUILD_ID)
+    async def delete(self, interaction: discord.Interaction, number: int = None, member: discord.Member = None):
+        """
+        Delete n messages from an user.
+        When number is "None", delete all messages
+        When user isn't specified, remove every message no matter who the user is
+        """
+        logger.info(f"Delete {number} messages")
+        
+        messages = [message async for message in interaction.channel.history(limit = number)]
+        
+        n = 0
+
+        for message in messages:
+            if message.author == member or member == None:
+                await message.delete()
+                n += 1
+
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"You've deleted {n} message(s) {f"from {member.mention}" if member != None else ""}",
+            title="Deleted messages!",
+            thumbnail= member.avatar.url if member != None else interaction.user.avatar.url,
+            colour=discord.Colour.red(),
+            author="Moderation"
+        )
+        
+        await interaction.response.send_message(embed=embed)
+
 
 
 async def setup(bot):

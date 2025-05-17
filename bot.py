@@ -9,6 +9,7 @@ from utils.debug import Logger
 import os
 from utils.level_system import LevelSystem
 from utils.embed_factory import EmbedFactory
+import json
 
 # Initilize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
@@ -19,7 +20,7 @@ intents.message_content = True
 level_system = LevelSystem(
     host="localhost",
     user="root",
-    password="",
+    password="luca",
     database="discordbot"
 )
 
@@ -30,6 +31,14 @@ initial_extensions = [
     "cogs.test",
     "cogs.moderation"
 ]
+
+blacklist = []
+
+with open('configs/blacklist.json') as f:
+    d = json.load(f)
+    for word in d["words"]:
+        blacklist.append(word)
+
 class DiscordBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=config.PREFIX, intents=intents)
@@ -84,6 +93,11 @@ class DiscordBot(commands.Bot):
         if message.author.bot:
             return
         
+        res = any(elem in message.content for elem in blacklist)
+        if res:
+            await message.delete()
+            return
+
         _, level = level_system.add_xp(message.author.id, message.guild.id, amount=10)
         xp, user_level = level_system.get_user(message.author.id, message.guild.id)
 
