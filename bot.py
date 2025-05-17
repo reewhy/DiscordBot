@@ -1,15 +1,19 @@
 import asyncio
 from dataclasses import dataclass
+from cogs.roles import Roles
 import discord
 from discord.ext import commands
 from cogs.level import LevelCog
 import config
 from config import GUILD_ID
+from utils import roles_system
 from utils.debug import Logger
 import os
 from utils.level_system import LevelSystem
 from utils.embed_factory import EmbedFactory
 import json
+
+from utils.roles_system import RoleSystem
 
 # Initilize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
@@ -18,6 +22,13 @@ intents = discord.Intents.all()
 intents.message_content = True
 
 level_system = LevelSystem(
+    host="localhost",
+    user="root",
+    password="luca",
+    database="discordbot"
+)
+
+roles_system = RoleSystem(
     host="localhost",
     user="root",
     password="luca",
@@ -55,8 +66,10 @@ class DiscordBot(commands.Bot):
         try:
             await self.add_cog(LevelCog(self, level_system))
             logger.info(f"Loaded extension: cogs.level")
+            await self.add_cog(Roles(self, role_system))
+            logger.info("Loaded extension: cogs.roles")
         except Exception as e:
-            logger.error(f"Failed to load extension cogs.level", exc_info=e)
+            logger.error(f"Failed to load extension", exc_info=e)
 
         try:
             await self.tree.sync(guild=GUILD_ID)
@@ -147,6 +160,9 @@ class DiscordBot(commands.Bot):
         embed.set_image(url="https://media1.tenor.com/m/JQZPRf0YTicAAAAd/emoji-in-distress-emoji-sad.gif")
         
         await self.announce_channel.send(embed=embed, content="||@everyone||")
+
+    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
+        # To-Do
 
 
 bot = DiscordBot()
