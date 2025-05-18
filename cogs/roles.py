@@ -1,3 +1,4 @@
+import re
 import discord
 from discord.ext import commands
 import random
@@ -70,16 +71,23 @@ class Roles(commands.Cog):
             )
             async def add(self, interaction: discord.Interaction, message: str, role: discord.Role, emoji: str):
                 await interaction.response.defer()
-
                 emoji_id = None
+                match = re.match(r'<a?:\w+:(\d+)>', emoji)
+                if match:
+                    emoji_id = int(match.group(1))
+
                 try:
-                    parsed = discord.PartialEmoji.from_str(emoji)
-                    if parsed.id:
-                        emoji_id = parsed_id
+                    partial = discord.PartialEmoji.from_str(emoji)
+                    if partial.id != None:
+                        emoji_id = partial.id
                     else:
-                        emoji_id = emoji
+                        emoji_id = partial.name
                 except Exception as e:
-                        return
+                    logger.error("Error adding role: ", exc_info=e)
+                    await interaction.response.send_message("Error")
+                
+                if emoji_id == None:
+                    emoji_id = emoji
 
                 try:
                     self.role_system.add_role(

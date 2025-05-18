@@ -12,7 +12,7 @@ import os
 from utils.level_system import LevelSystem
 from utils.embed_factory import EmbedFactory
 import json
-
+import re
 from utils.roles_system import RoleSystem
 
 # Initilize logger
@@ -21,18 +21,23 @@ logger = Logger(os.path.basename(__file__).replace(".py", ""))
 intents = discord.Intents.all()
 intents.message_content = True
 
+host = "localhost"
+user = "root"
+password = "luca"
+database = "discordbot"
+
 level_system = LevelSystem(
-    host="localhost",
-    user="root",
-    password="luca",
-    database="discordbot"
+    host=host,
+    user=user,
+    password=password,
+    database=database
 )
 
 roles_system = RoleSystem(
-    host="localhost",
-    user="root",
-    password="luca",
-    database="discordbot"
+    host=host,
+    user=user,
+    password=password,
+    database=database
 )
 
 initial_extensions = [
@@ -66,7 +71,7 @@ class DiscordBot(commands.Bot):
         try:
             await self.add_cog(LevelCog(self, level_system))
             logger.info(f"Loaded extension: cogs.level")
-            await self.add_cog(Roles(self, role_system))
+            await self.add_cog(Roles(self, roles_system))
             logger.info("Loaded extension: cogs.roles")
         except Exception as e:
             logger.error(f"Failed to load extension", exc_info=e)
@@ -161,10 +166,41 @@ class DiscordBot(commands.Bot):
         
         await self.announce_channel.send(embed=embed, content="||@everyone||")
 
-    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
-        # To-Do
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        logger.info(f"Payload: {payload}")
+        if payload.member.bot:
+            return
 
+        emoji_id = payload.emoji.id or payload.emoji.name
 
+        logger.info(f"Received reaction: {emoji_id} by {payload.member.name}")
+        
+        role_id = roles_system.get_role(payload.message_id, emoji_id)[0]
+
+        server : discord.Guild = await self.fetch_guild(payload.guild_id)
+        role : discord.Role = await server.fetch_role(role_id)
+
+        await payload.member.add_roles(role)
+
+        logger.info(f"Fetched role: {role.name}")
+
+    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
+        logger.info(f"Payload: {payload}")
+        if payload.user_id == self.user.id:
+            return
+
+        emoji_id = payload.emoji.id or payload.emoji.name
+
+        logger.info(f"Received reaction: {emoji_id} by {payload.member.id}")
+        
+        role_id = roles_system.get_role(payload.message_id, emoji_id)[0]
+
+        server : discord.Guild = await self.fetch_guild(payload.guild_id)
+        role : discord.Role = await server.fetch_role(role_id)
+
+        await payload.member.remove_roles(role)
+
+        logger.info(f"Fetched role: {role.name}")
 bot = DiscordBot()
 channel = None
 

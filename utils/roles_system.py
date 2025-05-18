@@ -26,7 +26,9 @@ class RoleSystem:
             host=host,
             user=user,
             password=password,
-            database=database
+            database=database,
+            charset='utf8mb4',
+            use_unicode = True
         )
         self.create_table()
 
@@ -61,7 +63,7 @@ class RoleSystem:
                         message BIGINT,
                         PRIMARY KEY (role_id, message),
                         FOREIGN KEY (message) REFERENCES messages(message_id)
-                    ); 
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin; 
                      """)
         cursor.close()
     
@@ -89,23 +91,21 @@ class RoleSystem:
         self.conn.commit()
         cursor.close()
 
-    def get_role(self, message_id: int) -> int:
+    def get_role(self, message_id: int, emoji: str) -> int:
         """
         Returns a role based on a message id
 
         Args:
             message_id (int): Unique ID of message.
-
+            emoji (int): Emoji of wanted role.
+    
         Returns:
             int: Role id
         """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            SELECT role_id FROM roles WHERE message=%s
-            """,
-            (message_id,)
-        )
+
+        print(f"Getting: {emoji}")
+        cursor = self.conn.cursor(buffered = True)
+        cursor.execute("SELECT role_id FROM roles WHERE message=%s AND BINARY emoji=%s", (message_id, emoji))
 
         result = cursor.fetchone()
         return result
