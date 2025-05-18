@@ -175,8 +175,8 @@ class DiscordBot(commands.Bot):
 
         logger.info(f"Received reaction: {emoji_id} by {payload.member.name}")
         
+        
         role_id = roles_system.get_role(payload.message_id, emoji_id)[0]
-
         server : discord.Guild = await self.fetch_guild(payload.guild_id)
         role : discord.Role = await server.fetch_role(role_id)
 
@@ -191,16 +191,33 @@ class DiscordBot(commands.Bot):
 
         emoji_id = payload.emoji.id or payload.emoji.name
 
-        logger.info(f"Received reaction: {emoji_id} by {payload.member.id}")
+        guild: discord.Guild = await self.fetch_guild(payload.guild_id)
+
+        try:
+            member: discord.Member = await guild.fetch_member(payload.user_id)
+        except discord.NotFound:
+            logger.warning(f"Member not found in guild {guild.id} for user ID {payload.user_id}")
+            return
+
+        logger.info(f"Received reaction: {emoji_id} by {member.name}")
         
-        role_id = roles_system.get_role(payload.message_id, emoji_id)[0]
+        role_data = roles_system.get_role(payload.message_id, emoji_id)
+        if not role_data:
+            logger.warning(f"No role mapping found for message ID {payload.message_id} and emoji {emoji_id}")
+            return
+        
+        role_id = role_data[0]
 
-        server : discord.Guild = await self.fetch_guild(payload.guild_id)
-        role : discord.Role = await server.fetch_role(role_id)
+        try:
+            role: discord.Role = await guild.fetch_role(role_id)
+        except discord.NotFound:
+            logger.warning(f"Role with ID {role_id} not found in guild {guild.id}")
+            return
 
-        await payload.member.remove_roles(role)
+        await member.remove_roles(role)
 
-        logger.info(f"Fetched role: {role.name}")
+        logger.info(f"Removed role: {role.name} from {member.name}")
+
 bot = DiscordBot()
 channel = None
 

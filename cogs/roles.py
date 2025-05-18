@@ -103,7 +103,7 @@ class Roles(commands.Cog):
 
                     embed = EmbedFactory.create_embed(
                         title="Successo!",
-                        description=f"`{emoji}` {role.mention} has been added!",
+                        description=f"{emoji} {role.mention} has been added!",
                         colour=discord.Color.green(),
                         author="Role System"
                     )
@@ -135,7 +135,39 @@ class Roles(commands.Cog):
                 )
 
                 await interaction.response.send_message(embed=embed)
+            
+            @app_commands.command(name="remove", description="Remove a role from a message.")
+            @app_commands.guilds(GUILD_ID)
+            @app_commands.describe(message="Message you want to remove the role from.", role="Role you want to remove.")
+            @app_commands.checks.has_permissions(administrator=True)
+            async def remove(self, interaction: discord.Interaction, message: str, role: discord.Role):
+                await interaction.response.defer()
+                try:
+                    msg: discord.Message = await interaction.channel.fetch_message(message)
+                except discord.NotFound:
+                    embed = EmbedFactory.create_embed(
+                        title="Error",
+                        description="The message was not found.",
+                        colour=discord.Color.red(),
+                        author="Role System"
+                    )
+                    await interaction.followup.send(embed=embed, ephemeral=True)
 
+                logger.info(f"Message: {msg}")
+
+                emoji = self.role_system.get_emoji(message, role.id)
+
+                await msg.clear_reaction(emoji)
+                
+                self.role_system.remove_role(message, role.id)
+
+                embed = EmbedFactory.create_embed(
+                    title="Removed role",
+                    description=f"You succesfully removed {role.mention} from the message",
+                    colour=discord.Color.green(),
+                    author="Role System"
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Roles(bot))

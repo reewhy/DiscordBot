@@ -127,3 +127,39 @@ class RoleSystem:
         self.conn.commit()
         cursor.close()
 
+    def get_emoji(self, message_id: int, role_id: int) -> str:
+        """
+        Get an emoji from a message and a role.
+
+        Args:
+            message_id  (int): Unique ID of message.
+            role_id (int): Unique ID of role.
+
+        Returns:
+            str: Emoji ID
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+                    SELECT emoji FROM roles
+                    WHERE message=%s AND role_id=%s
+        """, (message_id, role_id))
+
+        result = cursor.fetchone()
+        cursor.close()
+        return result[0] if result else None
+    
+    def remove_role(self, message_id: int, role_id: int):
+        """
+        Remove a reaction role from a message.
+
+        Args:
+            message_id (int): Unique ID of message.
+            role_id (int): Unique ID of the role.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+                        DELETE FROM roles
+                        WHERE message=%s AND role_id=%s
+                       """, (message_id, role_id))
+        self.conn.commit()
+        cursor.close()
