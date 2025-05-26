@@ -22,8 +22,9 @@ class Roles(commands.Cog):
         self.role_system = role_system
         self.bot.tree.add_command(self.MessageCommands(self.role_system))
     
-    @app_commands.guilds(GUILD_ID)
+
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guilds(*GUILD_ID)
     class MessageCommands(app_commands.Group):
         """
         Group of commands related to self-roles integration
@@ -36,9 +37,9 @@ class Roles(commands.Cog):
         
 
         @app_commands.command(name="create", description="Create a new role message.")
-        @app_commands.guilds(GUILD_ID)
         @app_commands.describe(title="Title of the role message", description="Custom description")
         @app_commands.checks.has_permissions(administrator=True)
+        @app_commands.guilds(*GUILD_ID)
         async def create(self, interaction: discord.Interaction, title: str, description: str):
             logger.info("Create a new self-role message")
             
@@ -48,27 +49,26 @@ class Roles(commands.Cog):
                 colour=discord.Color.random(),
                 author="Role System",
             )
-
             interaction_callback = await interaction.response.send_message(embed=embed)
     
             self.role_system.create_message(interaction_callback.message_id)
         
-        @app_commands.guilds(GUILD_ID)
         @app_commands.checks.has_permissions(administrator=True)
+        @app_commands.guilds(*GUILD_ID)
         class RoleSpecific(app_commands.Group):
             def __init__(self, role_system: RoleSystem):
                 super().__init__(name="role", description="Manage roles for messages.")
                 self.role_system = role_system
                 logger.info("Loaded command group: RoleSpecific")
 
-            @app_commands.command(name="add", description="Add new role to a message.")
-            @app_commands.guilds(GUILD_ID)
+            @app_commands.command(name="add", description="Add new role to a message.") 
             @app_commands.checks.has_permissions(administrator=True)
             @app_commands.describe(
                 message="Message you want to add role to.",
                 role="Role you want to add.",
                 emoji="Emoji to identify said role."
             )
+            @app_commands.guilds(*GUILD_ID)
             async def add(self, interaction: discord.Interaction, message: str, role: discord.Role, emoji: str):
                 await interaction.response.defer()
                 emoji_id = None
@@ -120,8 +120,8 @@ class Roles(commands.Cog):
                     logger.error("Error in role syste: ", exc_info=e)
 
             @app_commands.command(name="reset", description="Reset all roles.")
-            @app_commands.guilds(GUILD_ID)
             @app_commands.checks.has_permissions(administrator=True)
+            @app_commands.guilds(*GUILD_ID)
             async def reset(self, interaction: discord.Interaction):
 
                 self.role_system.reset()
@@ -137,9 +137,9 @@ class Roles(commands.Cog):
                 await interaction.response.send_message(embed=embed)
             
             @app_commands.command(name="remove", description="Remove a role from a message.")
-            @app_commands.guilds(GUILD_ID)
             @app_commands.describe(message="Message you want to remove the role from.", role="Role you want to remove.")
             @app_commands.checks.has_permissions(administrator=True)
+            @app_commands.guilds(*GUILD_ID)
             async def remove(self, interaction: discord.Interaction, message: str, role: discord.Role):
                 await interaction.response.defer()
                 try:

@@ -33,8 +33,8 @@ class LevelCog(commands.Cog):
         self.bot.tree.add_command(self.LevelAdd(level_system))
 
     @app_commands.command(name="level", description="Check your level or someone else's.")
-    @app_commands.guilds(GUILD_ID)
     @app_commands.describe(member="Member to check.")
+    @app_commands.guilds(*GUILD_ID)
     async def level(self, interaction: discord.Interaction, member: discord.Member = None):
         """
         Command to retrieve a user's level and XP.
@@ -75,9 +75,9 @@ class LevelCog(commands.Cog):
             await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="reset", description="Reset a user's level.")
-    @app_commands.guilds(GUILD_ID)
     @app_commands.describe(member="Member to reset.")
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guilds(*GUILD_ID)
     async def reset(self, interaction: discord.Interaction, member: discord.Member):
         """
         Command to reset a user's level and XP. This requires admin permissions.
@@ -111,8 +111,8 @@ class LevelCog(commands.Cog):
             logger.warning(f"Failed to reset level for {member}. No data found.")
             await interaction.response.send_message(embed=embed)
 
-    @app_commands.guilds(GUILD_ID)
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guilds(*GUILD_ID)
     class LevelSet(app_commands.Group):
         """
         Group of commands for setting user levels and XP. Requires admin permissions.
@@ -126,9 +126,9 @@ class LevelCog(commands.Cog):
             logger.info("Loaded command group: LevelSet")
 
         @app_commands.command(name="xp", description="Set a user's XP.")
-        @app_commands.guilds(GUILD_ID)
         @app_commands.describe(member="Member to change.", value="New XP value.")
         @app_commands.checks.has_permissions(administrator=True)
+        @app_commands.guilds(*GUILD_ID)
         async def xp(self, interaction: discord.Interaction, member: discord.Member, value: int):
             """
             Command to set a user's XP. Requires admin permissions.
@@ -139,7 +139,7 @@ class LevelCog(commands.Cog):
                 value (int): The new XP value to set.
             """
             xp, user_level = self.level_system.set_xp(member.id, interaction.guild.id, value)
-
+    
             embed = EmbedFactory.create_embed(
                 title="XP Changed",
                 description=f"You have set {member.mention}'s XP to {value}.",
@@ -155,9 +155,9 @@ class LevelCog(commands.Cog):
             await interaction.response.send_message(embed=embed)
 
         @app_commands.command(name="level", description="Set a user's level.")
-        @app_commands.guilds(GUILD_ID)
         @app_commands.describe(member="Member to change.", value="New level value.")
         @app_commands.checks.has_permissions(administrator=True)
+        @app_commands.guilds(*GUILD_ID)
         async def level(self, interaction: discord.Interaction, member: discord.Member, value: int):
             """
             Command to set a user's level. Requires admin permissions.
@@ -183,8 +183,8 @@ class LevelCog(commands.Cog):
             logger.info(f"Level set for {member} to {value}.")
             await interaction.response.send_message(embed=embed)
 
-    @app_commands.guilds(GUILD_ID)
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guilds(*GUILD_ID)
     class LevelAdd(app_commands.Group):
         """
         Group of commands for adding XP or levels to users. Requires admin permissions.
@@ -198,9 +198,9 @@ class LevelCog(commands.Cog):
             logger.info("Loaded command group: LevelAdd")
 
         @app_commands.command(name="xp", description="Add XP to a user.")
-        @app_commands.guilds(GUILD_ID)
         @app_commands.describe(member="Member to change.", value="Amount of XP to add.")
         @app_commands.checks.has_permissions(administrator=True)
+        @app_commands.guilds(*GUILD_ID)
         async def xp(self, interaction: discord.Interaction, member: discord.Member, value: int):
             """
             Command to add XP to a user. Requires admin permissions.
@@ -227,9 +227,9 @@ class LevelCog(commands.Cog):
             await interaction.response.send_message(embed=embed)
 
         @app_commands.command(name="level", description="Add levels to a user.")
-        @app_commands.guilds(GUILD_ID)
         @app_commands.describe(member="Member to change.", value="Amount of levels to add.")
         @app_commands.checks.has_permissions(administrator=True)
+        @app_commands.guilds(*GUILD_ID)
         async def level(self, interaction: discord.Interaction, member: discord.Member, value: int):
             """
             Command to add levels to a user. Requires admin permissions.

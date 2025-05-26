@@ -20,7 +20,6 @@ class Basic(commands.Cog):
     # With this function you're able to describe each parameter in your command
     @app_commands.describe(minimum = "Minimun rollable number", maximum="Maximum rollable number.")
     # Specify in which server you want to activate your bot
-    @app_commands.guilds(GUILD_ID)
     async def dice(self, interaction: discord.Interaction, minimum: int, maximum: int):
         x = random.randint(minimum, maximum)
 

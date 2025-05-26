@@ -67,7 +67,7 @@ class Moderation(commands.Cog):
         duration="Duration in format <number><unit> (s=seconds, m=minutes, h=hours, d=days)."
     )
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.guilds(GUILD_ID)
+    @app_guilds(*GUILD_ID)
     async def tempban(
             self,
             interaction: discord.Interaction,
@@ -175,7 +175,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="pardon", description="Pardon a temporarily banned user.")
     @app_commands.describe(user="User to pardon.", reason="Reason for the pardon.")
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.guilds(GUILD_ID)
+    @app_commands.guilds(*GUILD_ID)
     async def pardon(self, interaction: discord.Interaction, user: discord.User, reason: str = ""):
         """
         Pardons a user by removing their temporary ban.
@@ -227,7 +227,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="kick", description="Kick a user.")
     @app_commands.describe(member="Member to kick.", reason="Reason for the kick.")
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.guilds(GUILD_ID)
+    @app_commands.guilds(*GUILD_ID)
     async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = ""):
         """
         Kicks a user from the server.
@@ -256,7 +256,7 @@ class Moderation(commands.Cog):
     @app_commands.command(name="delete", description="Delete messages.")
     @app_commands.describe(number="Number of messages to be deleted", member="User")
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.guilds(GUILD_ID)
+    @app_commands.guilds(*GUILD_ID)
     async def delete(self, interaction: discord.Interaction, number: int = None, member: discord.Member = None):
         """
         Delete n messages from an user.

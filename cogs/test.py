@@ -18,18 +18,16 @@ class Test(commands.Cog):
     # This line sets a name for a command and its description
     @app_commands.command(name="join", description="Simulate member joining.")
     # Specify permissions
-    @app_commands.checks.has_permissions(administrator=True)
     # Specify in which server you want to activate your bot
-    @app_commands.guilds(GUILD_ID)
+    @app_commands.guilds(*GUILD_ID)
     async def join(self, interaction: discord.Interaction, member: discord.Member):
        await self.bot.on_member_join(member)
 
     # This line sets a name for a command and its description
     @app_commands.command(name="leave", description="Simulate member leaving.")
     # Specify permissions
-    @app_commands.checks.has_permissions(administrator=True)
     # Specify in which server you want to activate your bot
-    @app_commands.guilds(GUILD_ID)
+    @app_commands.guilds(*GUILD_ID)
     async def leave(self, interaction: discord.Interaction, member: discord.Member):
        await self.bot.on_member_leave(member)
 

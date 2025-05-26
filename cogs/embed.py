@@ -29,7 +29,7 @@ class EmbedAnswer(commands.Cog):
 
     )
     # Specify in which server you want to activate your bot
-    @app_commands.guilds(GUILD_ID)
+    @app_commands.guilds(*GUILD_ID)
     async def dice(
         self,
         interaction: discord.Interaction,

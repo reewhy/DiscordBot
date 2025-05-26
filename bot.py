@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from cogs.channel import Channel
 from cogs.roles import Roles
 import discord
 from discord.ext import commands
@@ -14,6 +15,7 @@ from utils.embed_factory import EmbedFactory
 import json
 import re
 from utils.roles_system import RoleSystem
+from utils.server_system import ServerSystem
 
 # Initilize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
@@ -25,6 +27,13 @@ host = "localhost"
 user = "root"
 password = "luca"
 database = "discordbot"
+
+server_system = ServerSystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
 
 level_system = LevelSystem(
     host=host,
@@ -73,11 +82,14 @@ class DiscordBot(commands.Bot):
             logger.info(f"Loaded extension: cogs.level")
             await self.add_cog(Roles(self, roles_system))
             logger.info("Loaded extension: cogs.roles")
+            await self.add_cog(Channel(self, server_system))
+            logger.info("Loaded extension: cogs.channel")
         except Exception as e:
             logger.error(f"Failed to load extension", exc_info=e)
 
         try:
-            await self.tree.sync(guild=GUILD_ID)
+            for id in GUILD_ID:
+                await self.tree.sync(guild=id)
             logger.info("Slash commands synced successfully")
         except Exception as e:
             logger.error("Failed to sync slash commands", exc_info=e)
@@ -96,6 +108,8 @@ class DiscordBot(commands.Bot):
 
 
             self.announce_channel = self.get_channel(1247283014480691272)
+            self.level_channel = self.get_channel(1376557487880142951)
+
 
             embed = EmbedFactory.create_embed(
                 title="Ready!",
@@ -129,31 +143,59 @@ class DiscordBot(commands.Bot):
             )
 
             embed.add_field(name="New level", value=user_level, inline=True)
+            
+            guild_id = message.guild.id
+            
+            channel_id = server_system.get_level_channel(guild_id)[0]
+            
+            logger.info(f"Found channel: {channel_id}")
 
-            await message.channel.send(embed=embed)
+            level_channel = self.get_channel(channel_id)
+            
+            if level_channel:
+                await level_channel.send(embed=embed)
+            else:
+                await self.announce_channel.send(content="Channel not found")
 
     async def on_member_join(self, member: discord.Member):
         logger.info(f"New member joined: {member.name}")
+        
+        guild_id = member.guild.id
+
+        description = server_system.get_description(guild_id)
+
         embed = discord.Embed(
             colour=discord.Color.brand_green(),
-            title=f"{member.name} si è unito a test 🎉",
-            description=f"Benvenuto {member.mention}!\nTi diamo il benvenuto nel nostro magnifico server.\nSpero tu ti possa trovare a tuo agio."
+            title=f"{member.name} si è unito a {member.guild.name} 🎉",
+            description=description.replace("%u", f"{member.mention}")
         )
 
-        embed.add_field(name="Leggi le regole", value="Canale1", inline=False)
-        embed.add_field(name="Presentati alla community", value="Canale2", inline=False)
-        embed.add_field(name="Personalizza il tuo profilo", value="Canale3", inline=False)
-        embed.add_field(name="Per saperne di più sui bot del server", value="Canale4", inline=False)
+        #        
+        channels = server_system.get_channels(guild_id)
+        print(channels)
+
+        for channel_id, description in channels:
+            channel = self.get_channel(channel_id)
+            embed.add_field(name=description, value=channel.mention, inline=False)
+        #embed.add_field(name="Leggi le regole", value=self.rules[guild_id].mention, inline=False)
+        #embed.add_field(name="Presentati alla community", value=self.presentations[guild_id].mention, inline=False)
 
         embed.set_thumbnail(url=member.avatar.url)
         
-        embed.set_image(url="https://cdn-longterm.mee6.xyz/plugins/embeds/images/1086830286580494408/900984c478465dfea712df07398fb80a8b86fd47c1de24798c678a9fe403f835.gif")
+        embed.set_image(url="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmF2MTc2YjBxamZ3aXdvMnF6cGdrc2s1dDR1YnR3aGVqb2c2Yjd3bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ExMGjbktr4phe/giphy.gif")
         
-        await self.announce_channel.send(embed=embed, content="||@everyone||") 
+        channel_id = server_system.get_announce_channel(guild_id)[0]
+        channel = self.get_channel(channel_id)
+        
+        if channel:
+            await channel.send(embed=embed, content="||everyone||") 
 
     
     async def on_member_leave(self, member: discord.Member):
         logger.info(f"Member left: {member.name}")
+
+        guild_id = member.guild.id
+
         embed = discord.Embed(
             colour=discord.Color.brand_red(),
             title=f"{member.name} ci ha abandonati 😢",
@@ -162,9 +204,13 @@ class DiscordBot(commands.Bot):
 
         embed.set_thumbnail(url=member.avatar.url)
         
-        embed.set_image(url="https://media1.tenor.com/m/JQZPRf0YTicAAAAd/emoji-in-distress-emoji-sad.gif")
+        embed.set_image(url="https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExZnd3aDJwYzdoZWhkbGV6b2Joc3c3MjJvZzUwMG8zMjljOGo5eXN1aSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/nyDuytA5bRdbW/giphy.gif")
         
-        await self.announce_channel.send(embed=embed, content="||@everyone||")
+        channel_id = server_system.get_announce_channel(guild_id)[0]
+        channel = self.get_channel(channel_id)
+
+        if channel:
+            await channel.send(embed=embed, content="||everyone||")
 
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         logger.info(f"Payload: {payload}")
