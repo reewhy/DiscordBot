@@ -19,7 +19,66 @@ class Channel(commands.Cog):
         self.bot = bot
         self.server_system = server_system
         self.bot.tree.add_command(self.Set(server_system, bot))
+        self.bot.tree.add_command(self.Role(server_system, bot))
     
+    @app_commands.command(name="onjoin", description="Set a role on join.")
+    @app_commands.guilds(*GUILD_ID)
+    @app_commands.describe(role="Role to add on join")
+    async def role(self, interaction: discord.Interaction, role: discord.Role):
+        try:
+            self.server_system.set_role(interaction.guild_id, role.id)
+        except Exception as e:
+            embed = EmbedFactory.create_embed(
+                title="Errore",
+                description=e,
+                colour=discord.Color.red(),
+                interaction=interaction,
+                author="Server System"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        embed = EmbedFactory.create_embed(
+            title="Success!",
+            description="You've successfully set the new on join role",
+            colour=discord.Color.green(),
+            interaction=interaction,
+            author="Server System"
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.guilds(*GUILD_ID)
+    class Role(app_commands.Group):
+        def __init__(self, server_system: ServerSystem, bot: commands.Bot):
+            super().__init__(name="role", description="Role levels settings.")
+            self.server_system = server_system
+            self.bot = bot
+
+        @app_commands.command(name="set", description="Set a new role level.")
+        @app_commands.guilds(*GUILD_ID)
+        @app_commands.describe(role="Role you want to set",level="Level of the role")
+        async def set(self, interaction: discord.Interaction, role: discord.Role, level: int):
+            try:
+                self.server_system.add_role(interaction.guild_id, role.id, level)
+            except Exception as e:
+                embed = EmbedFactory.create_embed(
+                    title="Error",
+                    description=e,
+                    colour=discord.Color.red(),
+                    interaction=interaction,
+                    author="Server System"
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
+            embed = EmbedFactory.create_embed(
+                title="Level role succesfully created!",
+                description=f"You've successfully set {role.mention} for level: {level}",
+                colour=discord.Color.green(),
+                interaction=interaction,
+                author="Server System"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @app_commands.guilds(*GUILD_ID)
     class Set(app_commands.Group):
         def __init__(self, server_system: ServerSystem, bot: commands.Bot):

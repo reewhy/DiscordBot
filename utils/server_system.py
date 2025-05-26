@@ -25,6 +25,23 @@ class ServerSystem:
                             description TEXT,
                             PRIMARY KEY(guild_id))
                         """)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS onjoin(
+                role_id BIGINT,
+                guild_id BIGINT,
+                PRIMARY KEY(role_id, guild_id))
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS level_roles(
+                guild_id BIGINT,
+                role_id BIGINT,
+                level INT,
+                PRIMARY KEY(guild_id, role_id))
+            """
+        )
         cursor.close()
 
     def add_channel(self, guild_id, channel_id, description = ""):
@@ -114,4 +131,73 @@ class ServerSystem:
                        """, (guild_id,))
         result = cursor.fetchall()
         cursor.close()
+        return result
+
+    def set_role(self, guild_id, role_id):
+        cursor = self.conn.cursor(buffered = True)
+        cursor.execute(
+            """
+            SELECT guild_id FROM onjoin WHERE guild_id = %s AND role_id = %s
+            """, (guild_id, role_id)
+        )
+
+        result = cursor.fetchone()
+
+        if result:
+            cursor.execute(
+                """
+                UPDATE onjoin SET role_id = %s WHERE guild_id = %s
+                """, (role_id, guild_id)
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO onjoin VALUES(%s, %s)
+                """, (role_id, guild_id)
+            )
+        self.conn.commit()
+        cursor.close()
+
+    def get_role(self, guild_id):
+        cursor = self.conn.cursor(buffered = True)
+        cursor.execute("""
+                        SELECT role_id FROM onjoin WHERE guild_id = %s
+                       """, (guild_id,))
+        result = cursor.fetchone()
+        return result
+    
+    def add_role(self, guild_id, role_id, level):
+        cursor = self.conn.cursor(buffered = True)
+        cursor.execute(
+            """
+            SELECT role_id FROM level_roles WHERE guild_id = %s AND role_id = %s
+            """, (guild_id, role_id)
+        )
+        result = cursor.fetchone()
+
+        if result:
+            cursor.execute(
+                """
+                UPDATE level_roles SET level = %s WHERE guild_id = %s AND role_id = %s
+                """, (level, guild_id, role_id)
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO level_roles VALUES(%s, %s, %s)
+                """, (guild_id, role_id, level)
+            )
+        self.conn.commit()
+        cursor.close()
+
+    def get_all_roles(self, guild_id, level):
+        cursor = self.conn.cursor(buffered = True)
+
+        cursor.execute(
+            """
+            SELECT role_id FROM level_roles WHERE guild_id = %s AND level = %s
+            """, (guild_id, level)
+        )
+
+        result = cursor.fetchall()
         return result

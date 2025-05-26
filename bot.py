@@ -133,6 +133,19 @@ class DiscordBot(commands.Bot):
         _, level = level_system.add_xp(message.author.id, message.guild.id, amount=10)
         xp, user_level = level_system.get_user(message.author.id, message.guild.id)
 
+        try:
+            roles = server_system.get_all_roles(message.guild.id, user_level)
+            logger.info(roles)
+            to_add = []
+            if len(roles) > 0:
+                for role_id in roles:
+                    role = await message.guild.fetch_role(role_id[0])
+                    to_add.append(role)
+                logger.info(to_add)
+                await message.author.add_roles(*to_add)
+        except Exception as e:
+            logger.error("Error in role level:", exc_info=e)
+
         if xp == 0:
             embed = EmbedFactory.create_embed(
                 title="Level up!",
@@ -163,6 +176,13 @@ class DiscordBot(commands.Bot):
         guild_id = member.guild.id
 
         description = server_system.get_description(guild_id)
+
+        try:
+            role_id = server_system.get_role(guild_id)
+            role = await member.guild.fetch_role(role_id)
+            await member.add_roles(role)
+        except:
+            logger.warning(f"No role found.")
 
         embed = discord.Embed(
             colour=discord.Color.brand_green(),
