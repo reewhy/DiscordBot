@@ -91,20 +91,26 @@ class ServerSystem:
         cursor.close()
 
     def get_description(self, guild_id):
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.conn.cursor(buffered=True)
         cursor.execute(
             """
-            SELECT description FROM descriptions WHERE guild_id = %s
-            """, (guild_id, )
+            SELECT description
+            FROM descriptions
+            WHERE guild_id = %s
+            """, (guild_id,)
         )
-        result = cursor.fetchone()[0]
-        
-        if not result:
-            result = (f"Benvenuto %u!\nTi diamo il benvenuto nel nostro magnifico server.\nSpero tu ti possa trovare a tuo agio.", )
-            set_description(guild_id, result)
+        row = cursor.fetchone()
+
+        # If the server doesn't have a description in the DB yet
+        if not row:
+            default_text = "Benvenuto %u!\nTi diamo il benvenuto nel nostro magnifico server.\nSpero tu ti possa trovare a tuo agio."
+            # Use self. to call the class method properly
+            self.set_description(guild_id, default_text)
+            cursor.close()
+            return default_text
 
         cursor.close()
-        return result
+        return row[0]  # Safely return the string out of the tuple
 
     def get_level_channel(self, guild_id):
         cursor = self.conn.cursor(buffered = True)
@@ -122,7 +128,7 @@ class ServerSystem:
                        """, (guild_id,))
         result = cursor.fetchone()
         cursor.close()
-        return result
+        return result[0] if result else None
 
     def get_channels(self, guild_id):
         cursor = self.conn.cursor()
@@ -131,7 +137,7 @@ class ServerSystem:
                        """, (guild_id,))
         result = cursor.fetchall()
         cursor.close()
-        return result
+        return result[0] if result else []
 
     def set_role(self, guild_id, role_id):
         cursor = self.conn.cursor(buffered = True)

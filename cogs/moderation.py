@@ -67,7 +67,7 @@ class Moderation(commands.Cog):
         duration="Duration in format <number><unit> (s=seconds, m=minutes, h=hours, d=days)."
     )
     @app_commands.checks.has_permissions(administrator=True)
-    @app_guilds(*GUILD_ID)
+    @app_commands.guilds(*GUILD_ID)
     async def tempban(
             self,
             interaction: discord.Interaction,

@@ -16,6 +16,7 @@ import json
 import re
 from utils.roles_system import RoleSystem
 from utils.server_system import ServerSystem
+from utils.board_system import BoardSystem
 
 # Initilize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
@@ -43,6 +44,13 @@ level_system = LevelSystem(
 )
 
 roles_system = RoleSystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+
+board_system = BoardSystem(
     host=host,
     user=user,
     password=password,
@@ -88,8 +96,8 @@ class DiscordBot(commands.Bot):
             logger.error(f"Failed to load extension", exc_info=e)
 
         try:
-            for id in GUILD_ID:
-                await self.tree.sync(guild=id)
+            for g_id in GUILD_ID:
+                await self.tree.sync(guild=discord.Object(id=g_id))
             logger.info("Slash commands synced successfully")
         except Exception as e:
             logger.error("Failed to sync slash commands", exc_info=e)
@@ -107,8 +115,8 @@ class DiscordBot(commands.Bot):
             logger.info("Presence updated successfully")
 
 
-            self.announce_channel = self.get_channel(1247283014480691272)
-            self.level_channel = self.get_channel(1376557487880142951)
+            self.announce_channel = self.get_channel(1528433049828589731)
+            self.level_channel = self.get_channel(1528433049828589733)
 
 
             embed = EmbedFactory.create_embed(
@@ -172,17 +180,18 @@ class DiscordBot(commands.Bot):
 
     async def on_member_join(self, member: discord.Member):
         logger.info(f"New member joined: {member.name}")
-        
-        guild_id = member.guild.id
 
+        guild_id = member.guild.id
         description = server_system.get_description(guild_id)
 
         try:
-            role_id = server_system.get_role(guild_id)
-            role = await member.guild.fetch_role(role_id)
-            await member.add_roles(role)
-        except:
-            logger.warning(f"No role found.")
+            role_id_data = server_system.get_role(guild_id)
+            if role_id_data:
+                role_id = role_id_data[0]
+                role = await member.guild.fetch_role(role_id)
+                await member.add_roles(role)
+        except Exception as e:
+            logger.warning(f"No role found or impossible to add: {e}")
 
         embed = discord.Embed(
             colour=discord.Color.brand_green(),
@@ -190,25 +199,34 @@ class DiscordBot(commands.Bot):
             description=description.replace("%u", f"{member.mention}")
         )
 
-        #        
+        print("canali: ")
         channels = server_system.get_channels(guild_id)
         print(channels)
 
-        for channel_id, description in channels:
-            channel = self.get_channel(channel_id)
-            embed.add_field(name=description, value=channel.mention, inline=False)
-        #embed.add_field(name="Leggi le regole", value=self.rules[guild_id].mention, inline=False)
-        #embed.add_field(name="Presentati alla community", value=self.presentations[guild_id].mention, inline=False)
+        if channels:
+            for channel_id, desc in channels:
+                channel = self.get_channel(channel_id)
+                if channel:
+                    embed.add_field(name=desc, value=channel.mention, inline=False)
 
-        embed.set_thumbnail(url=member.avatar.url)
-        
-        embed.set_image(url="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmF2MTc2YjBxamZ3aXdvMnF6cGdrc2s1dDR1YnR3aGVqb2c2Yjd3bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ExMGjbktr4phe/giphy.gif")
-        
-        channel_id = server_system.get_announce_channel(guild_id)[0]
-        channel = self.get_channel(channel_id)
-        
-        if channel:
-            await channel.send(embed=embed, content="||everyone||") 
+        # FIX AVATAR: Se l'utente non ha un avatar personalizzato, usa quello di default di Discord
+        avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+        embed.set_thumbnail(url=avatar_url)
+
+        embed.set_image(
+            url="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmF2MTc2YjBxamZ3aXdvMnF6cGdrc2s1dDR1YnR3aGVqb2c2Yjd3bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ExMGjbktr4phe/giphy.gif")
+
+        # FIX ANNOUNCE: Rimuoviamo il [0] superfluo perché il metodo restituisce già l'ID pulito
+        channel_id = server_system.get_announce_channel(guild_id)
+
+        if channel_id:
+            channel = self.get_channel(channel_id)
+            if channel:
+                await channel.send(embed=embed, content="||@everyone||")
+            else:
+                logger.error(f"Announce channel con ID {channel_id} non trovato in cache.")
+        else:
+            logger.warning(f"Nessun canale announce configurato per la gilda {guild_id}")
 
     
     async def on_member_leave(self, member: discord.Member):
@@ -233,22 +251,99 @@ class DiscordBot(commands.Bot):
             await channel.send(embed=embed, content="||everyone||")
 
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        logger.info(f"Payload: {payload}")
-        if payload.member.bot:
+        logger.info("--- Reaction Add Event Triggered ---")
+
+        if payload.member and payload.member.bot:
+            logger.info("Ignored: Reaction is from a bot.")
             return
 
         emoji_id = payload.emoji.id or payload.emoji.name
+        logger.info(f"Reaction added: {emoji_id} on message ID: {payload.message_id}")
 
-        logger.info(f"Received reaction: {emoji_id} by {payload.member.name}")
-        
-        
-        role_id = roles_system.get_role(payload.message_id, emoji_id)[0]
-        server : discord.Guild = await self.fetch_guild(payload.guild_id)
-        role : discord.Role = await server.fetch_role(role_id)
+        # 1. Update and check reaction count
+        board_system.add_reaction(payload.message_id)
+        n_reactions = board_system.get_reactions(payload.message_id)[0]
 
-        await payload.member.add_roles(role)
+        # Hardcoded to 3 for testing — ensure this matches your desired threshold!
+        min_react = 1
+        logger.info(f"Current reactions: {n_reactions} / Target: {min_react}")
 
-        logger.info(f"Fetched role: {role.name}")
+        # 2. Check if we hit the exact threshold
+        if n_reactions == min_react:
+            logger.info("Threshold reached! Fetching original message...")
+
+            source_channel = self.get_channel(payload.channel_id)
+            if not source_channel:
+                logger.error(f"Could not find source channel {payload.channel_id} in cache.")
+                return
+
+            try:
+                message = await source_channel.fetch_message(payload.message_id)
+                logger.info(f"Successfully fetched message from {message.author.name}")
+            except discord.NotFound:
+                logger.error(f"Message {payload.message_id} not found. It may have been deleted.")
+                return
+            except discord.Forbidden:
+                logger.error("Bot lacks 'Read Message History' permissions in the source channel.")
+                return
+
+            # 3. Build Embed
+            description = f"{message.content}\n\n**[Jump to message!]({message.jump_url})**"
+            embed = EmbedFactory.create_embed(
+                title="⭐ Popular Message",
+                description=description,
+                colour=discord.Color.gold(),
+                timestamp=True
+            )
+
+            avatar_url = message.author.avatar.url if message.author.avatar else message.author.default_avatar.url
+            embed.set_author(name=message.author.display_name, icon_url=avatar_url)
+
+            # Extract first image attachment if it exists
+            if message.attachments:
+                for attachment in message.attachments:
+                    if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'gif', 'webp']):
+                        embed.set_image(url=attachment.url)
+                        logger.info("Image attachment found and added to embed.")
+                        break
+
+            # 4. Fetch Announce Channel and Send
+            channel_id_data = server_system.get_announce_channel(payload.guild_id)
+            logger.info(f"Announce channel DB raw return: {channel_id_data}")
+
+            if channel_id_data:
+                # Handle potential tuple nesting from fetchone() or fetchall()
+                if isinstance(channel_id_data, list) and len(channel_id_data) > 0:
+                    channel_id_data = channel_id_data[0]
+                channel_id = channel_id_data[0] if isinstance(channel_id_data, tuple) else channel_id_data
+
+                logger.info(f"Parsed Announce Channel ID: {channel_id}")
+                channel = self.get_channel(channel_id)
+
+                if channel:
+                    await channel.send(content=f"Message featured from {source_channel.mention}", embed=embed)
+                    logger.info("Successfully sent featured message to announce channel!")
+                else:
+                    logger.error(
+                        f"Announce channel {channel_id} not found in bot's cache. Check bot permissions to view the channel.")
+            else:
+                logger.warning("No announce channel returned from database for this guild.")
+        else:
+            logger.info("Threshold not met (or already surpassed), skipping embed creation.")
+
+        # --- Role Logic ---
+        role_data = roles_system.get_role(payload.message_id, emoji_id)
+        if role_data:
+            role_id = role_data[0] if isinstance(role_data, tuple) else role_data
+            try:
+                server: discord.Guild = self.get_guild(payload.guild_id) or await self.fetch_guild(payload.guild_id)
+                role: discord.Role = server.get_role(role_id) or await server.fetch_role(role_id)
+
+                if role:
+                    await payload.member.add_roles(role)
+                    logger.info(f"Successfully added role: {role.name}")
+            except Exception as e:
+                logger.error(f"Failed to add role. Error: {e}")
 
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
         logger.info(f"Payload: {payload}")
