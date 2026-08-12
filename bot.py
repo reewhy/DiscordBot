@@ -112,7 +112,7 @@ class DiscordBot(commands.Bot):
             # Setup here your custom presence on ready
             await bot.change_presence(
                 status = discord.Status.online,
-                activity=discord.Game(name="witchcraft")
+                activity=discord.Game(name="made by semita <3")
             )
             logger.info("Presence updated successfully")
 
@@ -143,51 +143,52 @@ class DiscordBot(commands.Bot):
             await message.delete()
             return
 
-        _, level = level_system.add_xp(message.author.id, message.guild.id, amount=10)
-        xp, user_level = level_system.get_user(message.author.id, message.guild.id)
+        # _, level = level_system.add_xp(message.author.id, message.guild.id, amount=10)
+        # xp, user_level = level_system.get_user(message.author.id, message.guild.id)
 
-        try:
-            roles = server_system.get_all_roles(message.guild.id, user_level)
-            logger.info(roles)
-            to_add = []
-            if len(roles) > 0:
-                for role_id in roles:
-                    role = await message.guild.fetch_role(role_id[0])
-                    to_add.append(role)
-                logger.info(to_add)
-                await message.author.add_roles(*to_add)
-        except Exception as e:
-            logger.error("Error in role level:", exc_info=e)
+        #try:
+        #    roles = server_system.get_all_roles(message.guild.id, user_level)
+        #    logger.info(roles)
+        #    to_add = []
+        #    if len(roles) > 0:
+        #        for role_id in roles:
+        #            role = await message.guild.fetch_role(role_id[0])
+        #            to_add.append(role)
+        #        logger.info(to_add)
+        #        await message.author.add_roles(*to_add)
+        #except Exception as e:
+        #    logger.error("Error in role level:", exc_info=e)
 
-        if xp == 0:
-            embed = EmbedFactory.create_embed(
-                title="Level up!",
-                description=f"🎉 {message.author.mention} just leveled up!",
-                colour=discord.Color.yellow(),
-                author="Level",
-                thumbnail=message.author.avatar.url
-            )
-
-            embed.add_field(name="New level", value=user_level, inline=True)
-            
-            guild_id = message.guild.id
-            
-            channel_id = server_system.get_level_channel(guild_id)[0]
-            
-            logger.info(f"Found channel: {channel_id}")
-
-            level_channel = self.get_channel(channel_id)
-            
-            if level_channel:
-                await level_channel.send(embed=embed)
-            else:
-                await self.announce_channel.send(content="Channel not found")
+        #if xp == 0:
+            # embed = EmbedFactory.create_embed(
+            #     title="Level up!",
+            #     description=f"🎉 {message.author.mention} just leveled up!",
+            #     colour=discord.Color.yellow(),
+            #     author="Level",
+            #     thumbnail=message.author.avatar.url
+            # )
+            #
+            # embed.add_field(name="New level", value=user_level, inline=True)
+            #
+            # guild_id = message.guild.id
+            #
+            # channel_id = server_system.get_level_channel(guild_id)[0]
+            #
+            # logger.info(f"Found channel: {channel_id}")
+            #
+            # level_channel = self.get_channel(channel_id)
+            #
+            # if level_channel:
+            #     await level_channel.send(embed=embed)
+            # else:
+            #     await self.announce_channel.send(content="Channel not found")
 
     async def on_member_join(self, member: discord.Member):
         logger.info(f"New member joined: {member.name}")
 
         guild_id = member.guild.id
         description = server_system.get_description(guild_id)
+        #non dimenticarti di leggere le ⁠📕regole e prendere dei ⁠📖ruoli ! :heart:
 
         try:
             role_id_data = server_system.get_role(guild_id)
@@ -199,7 +200,7 @@ class DiscordBot(commands.Bot):
             logger.warning(f"No role found or impossible to add: {e}")
 
         embed = discord.Embed(
-            colour=discord.Color.brand_green(),
+            colour=discord.Color.dark_gray(),
             title=f"{member.name} si è unito a {member.guild.name} 🎉",
             description=description.replace("%u", f"{member.mention}")
         )
@@ -218,8 +219,8 @@ class DiscordBot(commands.Bot):
         avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
         embed.set_thumbnail(url=avatar_url)
 
-        embed.set_image(
-            url="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmF2MTc2YjBxamZ3aXdvMnF6cGdrc2s1dDR1YnR3aGVqb2c2Yjd3bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ExMGjbktr4phe/giphy.gif")
+        #embed.set_image(
+        #    url="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmF2MTc2YjBxamZ3aXdvMnF6cGdrc2s1dDR1YnR3aGVqb2c2Yjd3bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ExMGjbktr4phe/giphy.gif")
 
         # FIX ANNOUNCE: Rimuoviamo il [0] superfluo perché il metodo restituisce già l'ID pulito
         channel_id = server_system.get_announce_channel(guild_id)
@@ -227,7 +228,7 @@ class DiscordBot(commands.Bot):
         if channel_id:
             channel = self.get_channel(channel_id)
             if channel:
-                await channel.send(embed=embed, content="||@everyone||")
+                await channel.send(embed=embed, content=f"Welcome {member.mention}!")
             else:
                 logger.error(f"Announce channel con ID {channel_id} non trovato in cache.")
         else:
@@ -236,24 +237,30 @@ class DiscordBot(commands.Bot):
     
     async def on_member_leave(self, member: discord.Member):
         logger.info(f"Member left: {member.name}")
+        #
+        # guild_id = member.guild.id
+        #
+        # embed = discord.Embed(
+        #     colour=discord.Color.brand_red(),
+        #     title=f"{member.name} ci ha abandonati 😢",
+        #     description=f"Prima o poi si pentirà della sua scelta."
+        # )
+        #
+        # embed.set_thumbnail(url=member.avatar.url)
+        #
+        # embed.set_image(url="https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExZnd3aDJwYzdoZWhkbGV6b2Joc3c3MjJvZzUwMG8zMjljOGo5eXN1aSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/nyDuytA5bRdbW/giphy.gif")
+        #
+        # channel_id = server_system.get_announce_channel(guild_id)
+        #
+        # if channel_id:
+        #     channel = self.get_channel(channel_id)
+        #     if channel:
+        #         await channel.send(embed=embed, content=f"")
+        #     else:
+        #         logger.error(f"Announce channel con ID {channel_id} non trovato in cache.")
+        # else:
+        #     logger.warning(f"Nessun canale announce configurato per la gilda {guild_id}")
 
-        guild_id = member.guild.id
-
-        embed = discord.Embed(
-            colour=discord.Color.brand_red(),
-            title=f"{member.name} ci ha abandonati 😢",
-            description=f"Prima o poi si pentirà della sua scelta."
-        )
-
-        embed.set_thumbnail(url=member.avatar.url)
-        
-        embed.set_image(url="https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExZnd3aDJwYzdoZWhkbGV6b2Joc3c3MjJvZzUwMG8zMjljOGo5eXN1aSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/nyDuytA5bRdbW/giphy.gif")
-        
-        channel_id = server_system.get_announce_channel(guild_id)[0]
-        channel = self.get_channel(channel_id)
-
-        if channel:
-            await channel.send(embed=embed, content="||everyone||")
 
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         logger.info("--- Reaction Add Event Triggered ---")
