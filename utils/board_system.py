@@ -16,12 +16,12 @@ class BoardSystem:
                         CREATE TABLE IF NOT EXISTS board(
                             message_id BIGINT,
                             reactions INT,
-                            boarded INT,
+                            boarded BIGINT,
                             PRIMARY KEY (message_id))
         """)
         cursor.execute("""
                         CREATE TABLE IF NOT EXISTS board_config(
-                            min_reactions INT)
+                                                                   min_reactions INT)
         """)
         cursor.close()
 
@@ -82,18 +82,72 @@ class BoardSystem:
         cursor.close()
 
     def remove_reaction(self, message_id):
-        print("not implemented")
-        # prendi il messaggio
-        # controlla se ha reazione
-        # se non ha reazioni, return
-        # se ha reazioni, eliminane una
-        # se ha 0 reazioni, eliminare dalla board
+        cursor = self.conn.cursor(buffered=True)
 
-    def add_boarded(self, message_id):
+        # prendi il messaggio (e controlla se esiste)
+        cursor.execute("""
+                       SELECT reactions
+                       FROM board
+                       WHERE message_id = %s
+                       """, (message_id,))
+
+        result = cursor.fetchone()
+
+        # se non ha reazioni (non esiste nel db), return
+        if not result:
+            cursor.close()
+            return
+
+        current_reactions = result[0]
+
+        # se ha reazioni, eliminane una. Se arriva a 0, eliminare dalla board
+        if current_reactions > 1:
+            cursor.execute("""
+                           UPDATE board
+                           SET reactions = reactions - 1
+                           WHERE message_id = %s
+                           """, (message_id,))
+        else:
+            cursor.execute("""
+                           DELETE
+                           FROM board
+                           WHERE message_id = %s
+                           """, (message_id,))
+
+        self.conn.commit()
+        cursor.close()
+
+    def add_boarded(self, message_id, board_index):
         cursor = self.conn.cursor(buffered = True)
 
         cursor.execute("""
-            UPDATE board SET boarded = 1 WHERE message_id = %s""", (message_id,))
+            UPDATE board SET boarded = %s WHERE message_id = %s""", (board_index, message_id))
+
+        self.conn.commit()
+        cursor.close()
+
+    def get_boarded(self, message_id):
+        cursor = self.conn.cursor(buffered = True)
+
+        cursor.execute("""
+            SELECT boarded FROM board WHERE message_id = %s
+        """, (message_id, ))
+
+        result = cursor.fetchone()
+
+        cursor.close()
+        if result:
+            return result
+        else:
+            return 0
+
+    def remove_boarded(self, message_id):
+        cursor = self.conn.cursor(buffered=True)
+
+        cursor.execute("""
+                       UPDATE board
+                       SET boarded = 0
+                       WHERE message_id = %s""", (message_id,))
 
         self.conn.commit()
         cursor.close()
