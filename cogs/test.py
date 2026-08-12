@@ -14,6 +14,12 @@ logger = Logger(os.path.basename(__file__).replace(".py",""))
 class Test(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    @app_commands.command(name="say", description="Say something.")
+    @app_commands.describe(content="Contenuto della porca madonna")
+    @app_commands.checks.has_any_role(1530983265467498636)
+    async def say(self, interaction: discord.Interaction, content: str):
+        await interaction.channel.send(content)
     
     # This line sets a name for a command and its description
     @app_commands.command(name="join", description="Simulate member joining.")

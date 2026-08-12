@@ -25,11 +25,5 @@ class Basic(commands.Cog):
 
         await interaction.response.send_message(f"You rolled a {x}!")
 
-    @app_commands.command(name="say", description="Say something.")
-    @app_commands.describe(content="Contenuto della porca madonna")
-    @app_commands.checks.has_any_role(1530983265467498636)
-    async def say(self, interaction: discord.Interaction, content: str):
-        await interaction.channel.send(content)
-
 async def setup(bot):
     await bot.add_cog(Basic(bot))
