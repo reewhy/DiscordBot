@@ -1,5 +1,7 @@
 import asyncio
 from dataclasses import dataclass
+
+from cogs.basic import Basic
 from cogs.channel import Channel
 from cogs.roles import Roles
 import discord
@@ -90,7 +92,7 @@ class DiscordBot(commands.Bot):
             logger.info(f"Loaded extension: cogs.level")
             await self.add_cog(Roles(self, roles_system))
             logger.info("Loaded extension: cogs.roles")
-            await self.add_cog(Channel(self, server_system))
+            await self.add_cog(Channel(self, server_system, board_system))
             logger.info("Loaded extension: cogs.channel")
         except Exception as e:
             logger.error(f"Failed to load extension", exc_info=e)
@@ -115,8 +117,10 @@ class DiscordBot(commands.Bot):
             logger.info("Presence updated successfully")
 
 
-            self.announce_channel = self.get_channel(1528433049828589731)
-            self.level_channel = self.get_channel(1528433049828589733)
+            # self.announce_channel = self.get_channel(1528433049828589731)
+            # self.level_channel = self.get_channel(1528433049828589733)
+
+            self.meme = self.get_channel(1516814162846810234)
 
 
             embed = EmbedFactory.create_embed(
@@ -125,7 +129,8 @@ class DiscordBot(commands.Bot):
                 colour=discord.Color.green(),
                 author=False
             )
-            await self.announce_channel.send(embed=embed)
+            # await self.announce_channel.send(embed=embed)
+            # await self.meme.send(content='')
         except Exception as e:
             logger.error("Failed to update presence", exc_info=e)
 
@@ -264,7 +269,7 @@ class DiscordBot(commands.Bot):
 
         # emoji filter
         # todo: use emoji from board_config
-        target_emoji_id = 1528967985665146970
+        target_emoji_id = 1517325122363592867
 
         if payload.emoji.id == target_emoji_id:
             # 1. Update and check reaction count
@@ -272,7 +277,7 @@ class DiscordBot(commands.Bot):
             n_reactions = board_system.get_reactions(payload.message_id)[0]
 
             # Hardcoded to 1 for testing — ensure this matches your desired threshold!
-            min_react = 1
+            min_react = board_system.get_min_reactions(payload.guild_id)
             logger.info(f"Current reactions: {n_reactions} / Target: {min_react}")
 
             # 2. Check if we hit the exact threshold
@@ -297,7 +302,6 @@ class DiscordBot(commands.Bot):
                 # 3. Build Embed
                 description = f"{message.content}\n\n**[Jump to message!]({message.jump_url})**"
                 embed = EmbedFactory.create_embed(
-                    title="⭐ Popular Message",
                     description=description,
                     colour=discord.Color.gold(),
                     timestamp=True
@@ -316,30 +320,24 @@ class DiscordBot(commands.Bot):
                             break
 
                 # 4. Fetch Announce Channel and Send
-                channel_id_data = server_system.get_announce_channel(payload.guild_id)
-                logger.info(f"Announce channel DB raw return: {channel_id_data}")
+                # 4. Fetch Board Channel from BoardSystem
+                channel_id = board_system.get_board_channel(payload.guild_id)
+                logger.info(f"Board Channel ID found: {channel_id}")
 
-                if channel_id_data:
-                    if isinstance(channel_id_data, list) and len(channel_id_data) > 0:
-                        channel_id_data = channel_id_data[0]
-                    channel_id = channel_id_data[0] if isinstance(channel_id_data, tuple) else channel_id_data
-
-                    logger.info(f"Parsed Announce Channel ID: {channel_id}")
+                if channel_id:
                     channel = self.get_channel(channel_id)
 
                     if channel:
-                        # IMPORTANT: We save the result of channel.send to a variable called 'sent_msg'
-                        sent_msg = await channel.send(content=f"Message featured from {source_channel.mention}",
-                                                      embed=embed)
-                        logger.info("Successfully sent featured message to announce channel!")
+                        sent_msg = await channel.send(
+                            content=f"get a load of this chud...", embed=embed)
+                        logger.info("Successfully sent featured message to board channel!")
 
-                        # Now that it is sent, we have the ID. Add it to the database!
                         board_system.add_boarded(payload.message_id, sent_msg.id)
                         logger.info(f"Saved to DB: Original {payload.message_id} -> Board {sent_msg.id}")
                     else:
-                        logger.error(f"Announce channel {channel_id} not found in bot's cache.")
+                        logger.error(f"Board channel {channel_id} not found in bot's cache.")
                 else:
-                    logger.warning("No announce channel returned from database for this guild.")
+                    logger.warning("No board channel set for this guild. Use /setboard to set it.")
             else:
                 logger.info("Threshold not met (or already surpassed), skipping embed creation.")
 
@@ -377,49 +375,46 @@ class DiscordBot(commands.Bot):
 
         # emoji filter
         # todo: use emoji from board_config
-        target_emoji_id = 1528967985665146970
+        target_emoji_id = 1517325122363592867
 
         if payload.emoji.id == target_emoji_id:
-            board_system.remove_reaction(payload.message_id)
-
-            reactions = board_system.get_reactions(payload.message_id)
-
-            # Hardcoded to 1 for testing — ensure this matches your desired threshold!
-            min_react = 1
-
+            # 1. Recupera l'ID del messaggio della board PRIMA di rimuovere la riga dal DB
             board_message_id = board_system.get_boarded(payload.message_id)
-
-            # (Safety check) If your get_boarded method returns a tuple, extract the ID:
             if isinstance(board_message_id, tuple):
                 board_message_id = board_message_id[0]
 
-            # If reactions drops below min_react, delete it from the announce channel
-            if reactions == None or (isinstance(reactions, tuple) and reactions[0] < min_react) or (
-                    isinstance(reactions, int) and reactions < min_react):
-                board_system.remove_boarded(payload.message_id)
-                guild_id = member.guild.id
+            # 2. Rimuovi la reazione dal database (potrebbe eliminare la riga se arriva a 0)
+            board_system.remove_reaction(payload.message_id)
 
-                # Make sure to handle tuples from get_announce_channel
-                channel_id_data = server_system.get_announce_channel(guild_id)
-                channel_id = channel_id_data[0] if isinstance(channel_id_data, tuple) else channel_id_data
-                channel = self.get_channel(channel_id)
+            # 3. Controlla le reazioni rimaste
+            reactions = board_system.get_reactions(payload.message_id)
+            min_react = board_system.get_min_reactions(payload.guild_id)
 
+            # 4. Calcola il numero effettivo di reazioni
+            current_reactions = 0
+            if reactions is not None:
+                current_reactions = reactions[0] if isinstance(reactions, tuple) else reactions
+
+            # Se le reazioni scendono sotto il minimo, elimina il messaggio dalla board
+            # Se le reazioni scendono sotto il minimo, elimina il messaggio dalla board
+            if current_reactions < min_react:
                 if board_message_id:
-                    try:
-                        # FIX: Fetch board_message_id, not payload.message_id
-                        message = await channel.fetch_message(board_message_id)
-                        logger.info("Successfully fetched boarded message from announce channel.")
+                    # FETCH BOARD CHANNEL
+                    channel_id = board_system.get_board_channel(payload.guild_id)
+                    channel = self.get_channel(channel_id) if channel_id else None
 
-                        # Delete the message from the announce channel
-                        await message.delete()
-                        logger.info(f"Deleted board message {board_message_id} because reactions fell below threshold.")
-
-                    except discord.NotFound:
-                        logger.error(f"Board message {board_message_id} not found. It may have been manually deleted.")
-                    except discord.Forbidden:
-                        logger.error(
-                            "Bot lacks 'Manage Messages' or 'Read Message History' permissions in the announce channel.")
-
+                    if channel:
+                        try:
+                            message = await channel.fetch_message(board_message_id)
+                            logger.info("Successfully fetched boarded message from board channel.")
+                            await message.delete()
+                            logger.info(
+                                f"Deleted board message {board_message_id} because reactions fell below threshold.")
+                        except discord.NotFound:
+                            logger.error(
+                                f"Board message {board_message_id} not found. It may have been manually deleted.")
+                        except discord.Forbidden:
+                            logger.error("Bot lacks permissions in the board channel.")
 
 
         

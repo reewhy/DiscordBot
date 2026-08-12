@@ -52,7 +52,7 @@ class EmbedFactory:
         # Create the embed object with the basic information
         embed = discord.Embed(
             colour=colour,
-            title=title or EmbedFactory.DEFAULT_TITLE,  # Fallback to the default title if none is provided
+            title=title,  # Fallback to the default title if none is provided
             description=description
         )
         

@@ -4,6 +4,7 @@ from discord.ext import commands
 from datetime import datetime, timedelta
 import asyncio
 from utils.embed_factory import EmbedFactory
+from utils.board_system import BoardSystem
 from utils.debug import Logger
 from utils.moderation_system import ModerationSystem
 import os
@@ -57,8 +58,52 @@ class Moderation(commands.Cog):
             password="luca",
             database="discordbot"
         )
+        self.board_db = BoardSystem(
+            host="localhost",
+            user="root",
+            password="luca",
+            database="discordbot"
+        )
         self.next_unban_time = None
         self.unban_task = self.bot.loop.create_task(self._update_next_unban_time())
+
+    @app_commands.command(name="setminreactions", description="Imposta il numero minimo di reazioni per la board.")
+    @app_commands.describe(amount="Numero minimo di reazioni richieste (es. 3).")
+    @app_commands.checks.has_any_role(1530983265467498636, 1516814689110200381)
+    @app_commands.guilds(*GUILD_ID)
+    async def setminreactions(self, interaction: discord.Interaction, amount: int):
+        """
+        Sets the minimum amount of reactions required for a message to be boarded.
+        """
+        logger.info(
+            f"Admin {interaction.user.name} changing min reactions to {amount} for guild {interaction.guild_id}")
+
+        # Controllo che il numero sia valido
+        if amount < 1:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description="❌ Il numero minimo di reazioni deve essere almeno 1.",
+                title="Errore!",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Aggiorna il database (usando asyncio.to_thread perché la chiamata DB è sincrona)
+        await asyncio.to_thread(self.board_db.set_min_reactions, interaction.guild_id, amount)
+
+        # Invia messaggio di conferma
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"✅ Il numero minimo di reazioni per la board è stato impostato a **{amount}**.",
+            title="Board Aggiornata!",
+            colour=discord.Color.green(),
+            author="Moderation"
+        )
+
+        # Ephemeral=True così solo chi esegue il comando (l'admin) vede la risposta
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="tempban", description="Temporarily ban a user.")
     @app_commands.describe(
@@ -66,7 +111,7 @@ class Moderation(commands.Cog):
         reason="Reason for the ban.",
         duration="Duration in format <number><unit> (s=seconds, m=minutes, h=hours, d=days)."
     )
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.checks.has_any_role(1530983265467498636, 1516814689110200381)
     @app_commands.guilds(*GUILD_ID)
     async def tempban(
             self,

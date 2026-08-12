@@ -10,17 +10,22 @@ import os
 
 from utils.embed_factory import EmbedFactory
 from utils.server_system import ServerSystem
+from utils.board_system import BoardSystem  # IMPORTANTE: Aggiungi questa importazione
 
-logger = Logger(os.path.basename(__file__).replace(".py",""))
+logger = Logger(os.path.basename(__file__).replace(".py", ""))
+
 
 # All cogs need to inherit the class commands.Cog
 class Channel(commands.Cog):
-    def __init__(self, bot, server_system: ServerSystem):
+    # Aggiunto board_system nei parametri
+    def __init__(self, bot, server_system: ServerSystem, board_system: BoardSystem):
         self.bot = bot
         self.server_system = server_system
-        self.bot.tree.add_command(self.Set(server_system, bot))
+        self.board_system = board_system
+        # Passiamo board_system alla classe Set
+        self.bot.tree.add_command(self.Set(server_system, bot, board_system))
         self.bot.tree.add_command(self.Role(server_system, bot))
-    
+
     @app_commands.command(name="onjoin", description="Set a role on join.")
     @app_commands.guilds(*GUILD_ID)
     @app_commands.describe(role="Role to add on join")
@@ -37,7 +42,7 @@ class Channel(commands.Cog):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-        
+
         embed = EmbedFactory.create_embed(
             title="Success!",
             description="You've successfully set the new on join role",
@@ -56,7 +61,7 @@ class Channel(commands.Cog):
 
         @app_commands.command(name="set", description="Set a new role level.")
         @app_commands.guilds(*GUILD_ID)
-        @app_commands.describe(role="Role you want to set",level="Level of the role")
+        @app_commands.describe(role="Role you want to set", level="Level of the role")
         async def set(self, interaction: discord.Interaction, role: discord.Role, level: int):
             try:
                 self.server_system.add_role(interaction.guild_id, role.id, level)
@@ -81,17 +86,38 @@ class Channel(commands.Cog):
 
     @app_commands.guilds(*GUILD_ID)
     class Set(app_commands.Group):
-        def __init__(self, server_system: ServerSystem, bot: commands.Bot):
+        # Aggiunto board_system nei parametri
+        def __init__(self, server_system: ServerSystem, bot: commands.Bot, board_system: BoardSystem):
             super().__init__(name="channel", description="Set server channels.")
             self.server_system = server_system
+            self.board_system = board_system
             self.bot = bot
             logger.info("Loaded command group: Set")
+
+        # --- NUOVO COMANDO PER LA BOARD ---
+        @app_commands.command(name="board", description="Set this channel as the board channel.")
+        @app_commands.guilds(*GUILD_ID)
+        async def board(self, interaction: discord.Interaction):
+            self.board_system.set_board_channel(interaction.guild_id, interaction.channel_id)
+
+            embed = EmbedFactory.create_embed(
+                title="Board channel set",
+                description=f"You've set {interaction.channel.mention} come canale per la board.",
+                colour=discord.Color.green(),
+                author="Server System",
+                interaction=interaction
+            )
+
+            logger.info(f"{interaction.channel.name} set as board channel.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # ----------------------------------
 
         @app_commands.command(name="level", description="Set this channel as level channel.")
         @app_commands.guilds(*GUILD_ID)
         async def level(self, interaction: discord.Interaction):
             self.server_system.add_channel(interaction.guild_id, interaction.channel_id, "level")
-            
+
             embed = EmbedFactory.create_embed(
                 title="Level channel set",
                 description=f"You've set {interaction.channel.mention} as level channel.",
@@ -118,11 +144,13 @@ class Channel(commands.Cog):
             logger.info(f"{interaction.channel.name} set as announcements channel.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        @app_commands.command(name="add", description="Add a new channel, the channel added will be shown in announcements.")
+        @app_commands.command(name="add",
+                              description="Add a new channel, the channel added will be shown in announcements.")
         @app_commands.describe(description="Description of added channel")
         @app_commands.guilds(*GUILD_ID)
         async def add(self, interaction: discord.Interaction, description: str, channel: discord.TextChannel = None):
-            self.server_system.add_channel(interaction.guild_id, interaction.channel_id if channel == None else channel.id, description)
+            self.server_system.add_channel(interaction.guild_id,
+                                           interaction.channel_id if channel == None else channel.id, description)
             embed = EmbedFactory.create_embed(
                 title="New channel added!",
                 description=f"You've added {interaction.channel.mention} to the channel list.",
@@ -135,9 +163,11 @@ class Channel(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @app_commands.command(name="announce", description="Announce something in announcement chat.")
-        @app_commands.describe(value="Message to announce", title="Title of the announcement", author="Author of the announcemnt")
+        @app_commands.describe(value="Message to announce", title="Title of the announcement",
+                               author="Author of the announcemnt")
         @app_commands.guilds(*GUILD_ID)
-        async def announce(self, interaction: discord.Interaction, title: str, value: str, author: str = "Server System"):
+        async def announce(self, interaction: discord.Interaction, title: str, value: str,
+                           author: str = "Server System"):
             channel_id = self.server_system.get_announce_channel(interaction.guild_id)
 
             embed = EmbedFactory.create_embed(
@@ -170,4 +200,4 @@ class Channel(commands.Cog):
 
 
 async def setup(bot):
-    await bot.add_cog(Channel(bot))
+    pass
