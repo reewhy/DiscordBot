@@ -27,7 +27,7 @@ class Basic(commands.Cog):
 
     @app_commands.command(name="say", description="Say something.")
     @app_commands.describe(content="Contenuto della porca madonna")
-    @app_commands.checks.has_role(1530983265467498636)
+    @app_commands.checks.has_any_role(1530983265467498636)
     async def say(self, interaction: discord.Interaction, content: str):
         await interaction.channel.send(content)
 
