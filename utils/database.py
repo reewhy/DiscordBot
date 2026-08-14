@@ -1,16 +1,7 @@
 import mysql.connector
 
 class BaseDatabase:
-    def __init__(self, host, user, password, database):
-        # La connessione viene stabilita qui una volta per tutte
-        self.conn = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database
-        )
-
-    def __init__(self, host, user, password, database, charset, use_unicode):
+    def __init__(self, host, user, password, database, charset="utf8mb4", use_unicode=True):
         self.conn = mysql.connector.connect(
             host=host,
             user=user,
