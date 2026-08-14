@@ -3,7 +3,10 @@ import discord
 import mysql.connector
 from datetime import datetime
 
-class ModerationSystem:
+from utils.database import BaseDatabase
+
+
+class ModerationSystem(BaseDatabase):
     """
     A system to manage temporary bans in a Discord server using a MySQL database.
 
@@ -26,12 +29,7 @@ class ModerationSystem:
 
         This constructor also creates the necessary table in the database if it doesn't exist already.
         """
-        self.conn = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database
-        )
+        super().__init__(host, user, password, database)
         self.create_table()
 
     def create_table(self):
@@ -47,7 +45,7 @@ class ModerationSystem:
         Returns:
             None
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                     CREATE TABLE IF NOT EXISTS banned(
                         user_id BIGINT,
@@ -72,7 +70,7 @@ class ModerationSystem:
         Returns:
             None
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                     REPLACE INTO banned (user_id, guild_id, reason, unban_time)
                     VALUES(%s, %s, %s, %s)
@@ -90,7 +88,7 @@ class ModerationSystem:
             tuple: A tuple containing the user ID, guild ID, and unban time of the next user to be unbanned,
                    or `None` if no user is found.
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("SELECT user_id, guild_id, unban_time FROM banned ORDER BY unban_time ASC LIMIT 1")
         row = cursor.fetchone()
         cursor.close()
@@ -105,7 +103,7 @@ class ModerationSystem:
         Returns:
             list: A list of tuples, each containing the user ID and guild ID of a user whose ban has expired.
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("SELECT user_id, guild_id FROM banned WHERE unban_time <= %s", (datetime.utcnow(),))
         rows = cursor.fetchall()
         cursor.close()
@@ -121,7 +119,7 @@ class ModerationSystem:
         Returns:
             None
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("DELETE FROM banned WHERE unban_time <= %s", (datetime.utcnow(),))
         self.conn.commit()
         cursor.close()
@@ -138,7 +136,7 @@ class ModerationSystem:
             bool: `True` if the user was successfully pardoned (removed from the `banned` table), 
                   `False` if no ban was found for the user in the specified guild.
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("DELETE FROM banned WHERE user_id=%s AND guild_id=%s", (user_id, guild_id))
         self.conn.commit()
         

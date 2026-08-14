@@ -1,6 +1,9 @@
 import mysql.connector
 
-class RoleSystem:
+from utils.database import BaseDatabase
+
+
+class RoleSystem(BaseDatabase):
     """
     A system to manage self-roles messages in a Discord server using a MySQL database.
 
@@ -22,7 +25,7 @@ class RoleSystem:
 
         This constructor also creates the necessary table in the database if it doesn't exist already.
         """
-        self.conn = mysql.connector.connect(
+        super().__init__(
             host=host,
             user=user,
             password=password,
@@ -48,7 +51,7 @@ class RoleSystem:
         Returns:
             None
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                     CREATE TABLE IF NOT EXISTS messages(
                         message_id BIGINT,
@@ -77,7 +80,7 @@ class RoleSystem:
         Returns:
             boolean: True for success, False for failure
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("INSERT INTO messages(message_id) VALUES(%s)", (message_id,))
         self.conn.commit()
         cursor.close()
@@ -86,7 +89,7 @@ class RoleSystem:
         """
         Reset `roles` table
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("DELETE FROM roles")
         self.conn.commit()
         cursor.close()
@@ -104,7 +107,7 @@ class RoleSystem:
         """
 
         print(f"Getting: {emoji}")
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.get_cursor(buffered = True)
         cursor.execute("SELECT role_id FROM roles WHERE message=%s AND BINARY emoji=%s", (message_id, emoji))
 
         result = cursor.fetchone()
@@ -119,7 +122,7 @@ class RoleSystem:
             role_id (int): Unique ID of the role.
             emoji (int): Emoji that identifies the role.
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                         INSERT INTO roles(role_id, emoji, message)
                         VALUES (%s, %s, %s)
@@ -138,7 +141,7 @@ class RoleSystem:
         Returns:
             str: Emoji ID
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                     SELECT emoji FROM roles
                     WHERE message=%s AND role_id=%s
@@ -156,7 +159,7 @@ class RoleSystem:
             message_id (int): Unique ID of message.
             role_id (int): Unique ID of the role.
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                         DELETE FROM roles
                         WHERE message=%s AND role_id=%s

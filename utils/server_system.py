@@ -1,17 +1,16 @@
 import mysql.connector
 
-class ServerSystem:
+from utils.database import BaseDatabase
+
+
+class ServerSystem(BaseDatabase):
     def __init__(self, host, user, password, database):
-        self.conn = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database
-        )
+        super().__init__(host, user, password, database)
+        
         self.create_table()
 
     def create_table(self):
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                         CREATE TABLE IF NOT EXISTS channels(
                             guild_id BIGINT,
@@ -45,7 +44,7 @@ class ServerSystem:
         cursor.close()
 
     def add_channel(self, guild_id, channel_id, description = ""):
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.get_cursor(buffered = True)
         
         cursor.execute(
             """
@@ -67,7 +66,7 @@ class ServerSystem:
         cursor.close()
 
     def set_description(self, guild_id, description):
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
             SELECT guild_id FROM descriptions WHERE guild_id = %s
         """, (guild_id, ))
@@ -91,7 +90,7 @@ class ServerSystem:
         cursor.close()
 
     def get_description(self, guild_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute(
             """
             SELECT description
@@ -113,7 +112,7 @@ class ServerSystem:
         return row[0]  # Safely return the string out of the tuple
 
     def get_level_channel(self, guild_id):
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.get_cursor(buffered = True)
         cursor.execute("""
                         SELECT channel_id FROM channels WHERE guild_id = %s AND description="level"
                        """, (guild_id,))
@@ -122,7 +121,7 @@ class ServerSystem:
         return result
 
     def get_announce_channel(self, guild_id):
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.get_cursor(buffered = True)
         cursor.execute("""
                         SELECT channel_id FROM channels WHERE guild_id = %s AND description="announce"
                        """, (guild_id,))
@@ -131,7 +130,7 @@ class ServerSystem:
         return result[0] if result else None
 
     def get_channels(self, guild_id):
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                         SELECT channel_id, description FROM channels WHERE guild_id = %s AND description NOT IN ('level', 'announce')
                        """, (guild_id,))
@@ -140,7 +139,7 @@ class ServerSystem:
         return result[0] if result else []
 
     def set_role(self, guild_id, role_id):
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.get_cursor(buffered = True)
         cursor.execute(
             """
             SELECT guild_id FROM onjoin WHERE guild_id = %s AND role_id = %s
@@ -165,7 +164,7 @@ class ServerSystem:
         cursor.close()
 
     def get_role(self, guild_id):
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.get_cursor(buffered = True)
         cursor.execute("""
                         SELECT role_id FROM onjoin WHERE guild_id = %s
                        """, (guild_id,))
@@ -173,7 +172,7 @@ class ServerSystem:
         return result
     
     def add_role(self, guild_id, role_id, level):
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.get_cursor(buffered = True)
         cursor.execute(
             """
             SELECT role_id FROM level_roles WHERE guild_id = %s AND role_id = %s
@@ -197,7 +196,7 @@ class ServerSystem:
         cursor.close()
 
     def get_all_roles(self, guild_id, level):
-        cursor = self.conn.cursor(buffered = True)
+        cursor = self.get_cursor(buffered = True)
 
         cursor.execute(
             """

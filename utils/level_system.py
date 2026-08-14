@@ -1,6 +1,9 @@
 import mysql.connector
 
-class LevelSystem:
+from utils.database import BaseDatabase
+
+
+class LevelSystem(BaseDatabase):
     """
     A system to manage user levels and experience points (XP) in a Discord server using a MySQL database.
 
@@ -22,12 +25,7 @@ class LevelSystem:
 
         This constructor also creates the necessary table in the database if it doesn't exist already.
         """
-        self.conn = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database
-        )
+        super().__init__(host, user, password, database)
         self.create_table()
 
     def create_table(self):
@@ -43,7 +41,7 @@ class LevelSystem:
         Returns:
             None
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                     CREATE TABLE IF NOT EXISTS levels(
                         user_id BIGINT,
@@ -66,7 +64,7 @@ class LevelSystem:
         Returns:
             tuple: A tuple containing the user's XP and level, or `None` if the user doesn't exist in the database.
         """
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("SELECT xp, level FROM levels WHERE user_id = %s AND guild_id = %s", (user_id, guild_id))
         result = cursor.fetchone()
         cursor.close()
@@ -88,7 +86,7 @@ class LevelSystem:
         
         # If the user doesn't exist in the database, create a new entry with the given XP.
         if user is None:
-            cursor = self.conn.cursor()
+            cursor = self.get_cursor()
             cursor.execute("INSERT INTO levels (user_id, guild_id, xp) VALUES (%s, %s, %s)", (user_id, guild_id, amount))
             self.conn.commit()
             cursor.close()
@@ -103,7 +101,7 @@ class LevelSystem:
             xp = 0  # Reset XP after leveling up.
             new_level += 1
 
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                 REPLACE INTO levels (user_id, guild_id, xp, level)
                 VALUES (%s, %s, %s, %s)
@@ -129,7 +127,7 @@ class LevelSystem:
         
         # If the user doesn't exist in the database, create a new entry with the specified level.
         if user is None:
-            cursor = self.conn.cursor()
+            cursor = self.get_cursor()
             cursor.execute("INSERT INTO levels (user_id, guild_id, level) VALUES (%s, %s, %s)", (user_id, guild_id, amount))
             self.conn.commit()
             cursor.close()
@@ -138,7 +136,7 @@ class LevelSystem:
         xp, level = user
         level += amount
 
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                 REPLACE INTO levels (user_id, guild_id, xp, level)
                 VALUES (%s, %s, %s, %s)
@@ -163,7 +161,7 @@ class LevelSystem:
         user = self.get_user(user_id, guild_id)
         
         if user is None:
-            cursor = self.conn.cursor()
+            cursor = self.get_cursor()
             cursor.execute("INSERT INTO levels (user_id, guild_id, level) VALUES (%s, %s, %s)", (user_id, guild_id, value))
             self.conn.commit()
             cursor.close()
@@ -171,7 +169,7 @@ class LevelSystem:
         
         xp, _ = user
         
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                     REPLACE INTO levels (user_id, guild_id, xp, level)
                     VALUES (%s, %s, %s, %s)
@@ -196,7 +194,7 @@ class LevelSystem:
         user = self.get_user(user_id, guild_id)
         
         if user is None:
-            cursor = self.conn.cursor()
+            cursor = self.get_cursor()
             cursor.execute("INSERT INTO levels (user_id, guild_id, xp) VALUES (%s, %s, %s)", (user_id, guild_id, value))
             self.conn.commit()
             cursor.close()
@@ -204,7 +202,7 @@ class LevelSystem:
         
         level, _ = user
         
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                     REPLACE INTO levels (user_id, guild_id, xp, level)
                     VALUES (%s, %s, %s, %s)
@@ -230,7 +228,7 @@ class LevelSystem:
         if user is None:
             return False  # User does not exist
         
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
         cursor.execute("""
                 DELETE FROM levels WHERE user_id = %s AND guild_id = %s
                        """, (user_id, guild_id))

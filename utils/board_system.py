@@ -1,18 +1,15 @@
 import mysql.connector
 
+from utils.database import BaseDatabase
 
-class BoardSystem:
+
+class BoardSystem(BaseDatabase):
     def __init__(self, host, user, password, database):
-        self.conn = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database
-        )
+        super().__init__(host, user, password, database)
         self.create_table()
 
     def create_table(self):
-        cursor = self.conn.cursor()
+        cursor = self.get_cursor()
 
         cursor.execute("""
                        CREATE TABLE IF NOT EXISTS board
@@ -54,7 +51,7 @@ class BoardSystem:
 
     # --- NUOVI METODI PER IL CANALE DELLA BOARD ---
     def set_board_channel(self, guild_id, channel_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("SELECT guild_id FROM board_config WHERE guild_id = %s", (guild_id,))
 
         if cursor.fetchone():
@@ -73,7 +70,7 @@ class BoardSystem:
         cursor.close()
 
     def get_board_channel(self, guild_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("SELECT channel_id FROM board_config WHERE guild_id = %s", (guild_id,))
         result = cursor.fetchone()
         cursor.close()
@@ -84,7 +81,7 @@ class BoardSystem:
 
     # --- METODI AGGIORNATI PER LE REAZIONI (Ora basati sul guild_id) ---
     def set_min_reactions(self, guild_id, num):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("SELECT guild_id FROM board_config WHERE guild_id = %s", (guild_id,))
 
         if cursor.fetchone():
@@ -96,7 +93,7 @@ class BoardSystem:
         cursor.close()
 
     def get_min_reactions(self, guild_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("SELECT min_reactions FROM board_config WHERE guild_id = %s", (guild_id,))
         result = cursor.fetchone()
         cursor.close()
@@ -109,7 +106,7 @@ class BoardSystem:
 
     # --- METODI DEI MESSAGGI (Invariati) ---
     def add_reaction(self, message_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("SELECT * FROM board WHERE message_id = %s", (message_id,))
         if cursor.fetchone():
             cursor.execute("UPDATE board SET reactions = reactions + 1 WHERE message_id = %s", (message_id,))
@@ -119,7 +116,7 @@ class BoardSystem:
         cursor.close()
 
     def remove_reaction(self, message_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("SELECT reactions FROM board WHERE message_id = %s", (message_id,))
         result = cursor.fetchone()
         if not result:
@@ -135,26 +132,26 @@ class BoardSystem:
         cursor.close()
 
     def add_boarded(self, message_id, board_index):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("UPDATE board SET boarded = %s WHERE message_id = %s", (board_index, message_id))
         self.conn.commit()
         cursor.close()
 
     def get_boarded(self, message_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("SELECT boarded FROM board WHERE message_id = %s", (message_id,))
         result = cursor.fetchone()
         cursor.close()
         return result if result else 0
 
     def remove_boarded(self, message_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("UPDATE board SET boarded = 0 WHERE message_id = %s", (message_id,))
         self.conn.commit()
         cursor.close()
 
     def get_reactions(self, message_id):
-        cursor = self.conn.cursor(buffered=True)
+        cursor = self.get_cursor(buffered=True)
         cursor.execute("SELECT reactions FROM board WHERE message_id = %s", (message_id,))
         result = cursor.fetchone()
         cursor.close()
