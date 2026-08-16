@@ -261,7 +261,6 @@ class DiscordBot(commands.Bot):
         # else:
         #     logger.warning(f"Nessun canale announce configurato per la gilda {guild_id}")
 
-
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         logger.info("--- Reaction Add Event Triggered ---")
 
@@ -269,21 +268,19 @@ class DiscordBot(commands.Bot):
             logger.info("Ignored: Reaction is from a bot.")
             return
 
-        emoji_id = payload.emoji.id or payload.emoji.name
-        logger.info(f"Reaction added: {emoji_id} on message ID: {payload.message_id}")
+        # Use emoji.id for custom emojis, or emoji.name for standard Unicode emojis
+        emoji_identifier = payload.emoji.id or payload.emoji.name
+        logger.info(f"Reaction added: {emoji_identifier} on message ID: {payload.message_id}")
 
+        # Standard Unicode star emoji target
+        target_emoji = '⭐'
 
-
-        # emoji filter
-        # todo: use emoji from board_config
-        target_emoji_id = 1517325122363592867
-
-        if payload.emoji.id == target_emoji_id:
+        # Standard Unicode emojis have payload.emoji.id as None, so check payload.emoji.name
+        if payload.emoji.name == target_emoji:
             # 1. Update and check reaction count
             board_system.add_reaction(payload.message_id)
             n_reactions = board_system.get_reactions(payload.message_id)[0]
 
-            # Hardcoded to 1 for testing — ensure this matches your desired threshold!
             min_react = board_system.get_min_reactions(payload.guild_id)
             logger.info(f"Current reactions: {n_reactions} / Target: {min_react}")
 
@@ -291,9 +288,9 @@ class DiscordBot(commands.Bot):
             if n_reactions == min_react:
                 logger.info("Threshold reached! Fetching original message...")
 
-                source_channel = self.get_channel(payload.channel_id)
+                source_channel = self.get_channel(payload.channel_id) or await self.fetch_channel(payload.channel_id)
                 if not source_channel:
-                    logger.error(f"Could not find source channel {payload.channel_id} in cache.")
+                    logger.error(f"Could not find source channel {payload.channel_id}.")
                     return
 
                 try:
@@ -326,30 +323,29 @@ class DiscordBot(commands.Bot):
                             logger.info("Image attachment found and added to embed.")
                             break
 
-                # 4. Fetch Announce Channel and Send
                 # 4. Fetch Board Channel from BoardSystem
                 channel_id = board_system.get_board_channel(payload.guild_id)
                 logger.info(f"Board Channel ID found: {channel_id}")
 
                 if channel_id:
-                    channel = self.get_channel(channel_id)
+                    channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
 
                     if channel:
                         sent_msg = await channel.send(
-                            content=f"get a load of this chud...", embed=embed)
+                            content="get a load of this chud...", embed=embed)
                         logger.info("Successfully sent featured message to board channel!")
 
                         board_system.add_boarded(payload.message_id, sent_msg.id)
                         logger.info(f"Saved to DB: Original {payload.message_id} -> Board {sent_msg.id}")
                     else:
-                        logger.error(f"Board channel {channel_id} not found in bot's cache.")
+                        logger.error(f"Board channel {channel_id} not found.")
                 else:
                     logger.warning("No board channel set for this guild. Use /setboard to set it.")
             else:
                 logger.info("Threshold not met (or already surpassed), skipping embed creation.")
 
         # --- Role Logic ---
-        role_data = roles_system.get_role(payload.message_id, emoji_id)
+        role_data = roles_system.get_role(payload.message_id, emoji_identifier)
         if role_data:
             role_id = role_data[0] if isinstance(role_data, tuple) else role_data
             try:
@@ -367,30 +363,28 @@ class DiscordBot(commands.Bot):
         if payload.user_id == self.user.id:
             return
 
-        emoji_id = payload.emoji.id or payload.emoji.name
+        emoji_identifier = payload.emoji.id or payload.emoji.name
 
-        guild: discord.Guild = await self.fetch_guild(payload.guild_id)
+        guild: discord.Guild = self.get_guild(payload.guild_id) or await self.fetch_guild(payload.guild_id)
 
         try:
-            member: discord.Member = await guild.fetch_member(payload.user_id)
+            member: discord.Member = guild.get_member(payload.user_id) or await guild.fetch_member(payload.user_id)
         except discord.NotFound:
             logger.warning(f"Member not found in guild {guild.id} for user ID {payload.user_id}")
             return
 
-        logger.info(f"Received reaction: {emoji_id} by {member.name}")
+        logger.info(f"Received reaction: {emoji_identifier} by {member.name}")
 
+        # Standard Unicode star emoji target
+        target_emoji = '⭐'
 
-        # emoji filter
-        # todo: use emoji from board_config
-        target_emoji_id = 1517325122363592867
-
-        if payload.emoji.id == target_emoji_id:
+        if payload.emoji.name == target_emoji:
             # 1. Recupera l'ID del messaggio della board PRIMA di rimuovere la riga dal DB
             board_message_id = board_system.get_boarded(payload.message_id)
             if isinstance(board_message_id, tuple):
                 board_message_id = board_message_id[0]
 
-            # 2. Rimuovi la reazione dal database (potrebbe eliminare la riga se arriva a 0)
+            # 2. Rimuovi la reazione dal database
             board_system.remove_reaction(payload.message_id)
 
             # 3. Controlla le reazioni rimaste
@@ -403,10 +397,8 @@ class DiscordBot(commands.Bot):
                 current_reactions = reactions[0] if isinstance(reactions, tuple) else reactions
 
             # Se le reazioni scendono sotto il minimo, elimina il messaggio dalla board
-            # Se le reazioni scendono sotto il minimo, elimina il messaggio dalla board
             if current_reactions < min_react:
                 if board_message_id:
-                    # FETCH BOARD CHANNEL
                     channel_id = board_system.get_board_channel(payload.guild_id)
                     channel = self.get_channel(channel_id) if channel_id else None
 
@@ -423,24 +415,21 @@ class DiscordBot(commands.Bot):
                         except discord.Forbidden:
                             logger.error("Bot lacks permissions in the board channel.")
 
-
-        
-        role_data = roles_system.get_role(payload.message_id, emoji_id)
+        # --- Role Logic ---
+        role_data = roles_system.get_role(payload.message_id, emoji_identifier)
         if not role_data:
-            logger.warning(f"No role mapping found for message ID {payload.message_id} and emoji {emoji_id}")
+            logger.warning(f"No role mapping found for message ID {payload.message_id} and emoji {emoji_identifier}")
             return
-        
-        role_id = role_data[0]
+
+        role_id = role_data[0] if isinstance(role_data, tuple) else role_data
 
         try:
-            role: discord.Role = await guild.fetch_role(role_id)
+            role: discord.Role = guild.get_role(role_id) or await guild.fetch_role(role_id)
+            if role:
+                await member.remove_roles(role)
+                logger.info(f"Removed role: {role.name} from {member.name}")
         except discord.NotFound:
             logger.warning(f"Role with ID {role_id} not found in guild {guild.id}")
-            return
-
-        await member.remove_roles(role)
-
-        logger.info(f"Removed role: {role.name} from {member.name}")
 
 bot = DiscordBot()
 channel = None
