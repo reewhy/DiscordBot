@@ -19,6 +19,7 @@ import re
 from utils.roles_system import RoleSystem
 from utils.server_system import ServerSystem
 from utils.board_system import BoardSystem
+from views.ticket_view import TicketView, TicketControlView
 
 # Initilize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
@@ -103,6 +104,10 @@ class DiscordBot(commands.Bot):
             logger.info("Slash commands synced successfully")
         except Exception as e:
             logger.error("Failed to sync slash commands", exc_info=e)
+
+        logger.info("Setting up ticket view")
+        self.add_view(TicketView())
+        self.add_view(TicketControlView())
 
     async def on_ready(self):
         logger.info(f"We have logged in as {bot.user.name} (ID: {bot.user.id}")

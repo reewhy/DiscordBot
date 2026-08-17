@@ -11,6 +11,7 @@ import os
 from utils.embed_factory import EmbedFactory
 from utils.server_system import ServerSystem
 from utils.board_system import BoardSystem  # IMPORTANTE: Aggiungi questa importazione
+from views.ticket_view import TicketView
 
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
@@ -144,6 +145,35 @@ class Channel(commands.Cog):
             logger.info(f"{interaction.channel.name} set as announcements channel.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        @app_commands.command(name="ticket", description="Set this channel as ticket channel.")
+        @app_commands.guilds(*GUILD_ID)
+        async def ticket(self, interaction: discord.Interaction):
+            # 1. Register the channel in your system
+            self.server_system.add_channel(interaction.guild_id, interaction.channel_id, "ticket")
+
+            # 2. Ephemeral confirmation for the user who ran the command
+            confirm_embed = EmbedFactory.create_embed(
+                title="Ticket channel set",
+                description=f"You've set {interaction.channel.mention} as the ticket channel.",
+                colour=discord.Color.green(),
+                author="Server System",
+                interaction=interaction
+            )
+            await interaction.response.send_message(embed=confirm_embed, ephemeral=True)
+            logger.info(f"{interaction.channel.name} set as ticket channel.")
+
+            # 3. Public embed with the button for everyone else to see
+            public_embed = EmbedFactory.create_embed(
+                title="Ticket supporto",
+                description="Clicca il tasto qui sotto per aprire un nuovo ticket e parlare in privato con lo staff del server.",
+                colour=discord.Color.blue(),
+                author="Support staff",
+                # interaction=interaction
+            )
+
+            # Send the public embed and attach the View containing the button
+            await interaction.channel.send(embed=public_embed, view=TicketView())
+
         @app_commands.command(name="add",
                               description="Add a new channel, the channel added will be shown in announcements.")
         @app_commands.describe(description="Description of added channel")
@@ -181,6 +211,8 @@ class Channel(commands.Cog):
             channel = self.bot.get_channel(channel_id)
             if channel:
                 await channel.send(embed=embed)
+
+
 
         @app_commands.command(name="description", description="Set server description, %u = user mention")
         @app_commands.describe(value="Description for the join message")
