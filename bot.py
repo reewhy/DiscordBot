@@ -289,7 +289,7 @@ class DiscordBot(commands.Bot):
             min_react = board_system.get_min_reactions(payload.guild_id)
             logger.info(f"Current reactions: {n_reactions} / Target: {min_react}")
 
-            # 2. Check if we hit the exact threshold
+            # 2. Check if we hit the exact threshold for boarding
             if n_reactions == min_react:
                 logger.info("Threshold reached! Fetching original message...")
 
@@ -346,6 +346,37 @@ class DiscordBot(commands.Bot):
                         logger.error(f"Board channel {channel_id} not found.")
                 else:
                     logger.warning("No board channel set for this guild. Use /setboard to set it.")
+
+            # 5. NEW: Check if we hit the "extra 2" threshold to change the bot's PFP
+            elif n_reactions == min_react + 2:
+                logger.info("Threshold + 2 reached! Checking for image to set as bot pfp...")
+
+                source_channel = self.get_channel(payload.channel_id) or await self.fetch_channel(payload.channel_id)
+                if not source_channel:
+                    return
+
+                try:
+                    message = await source_channel.fetch_message(payload.message_id)
+                except (discord.NotFound, discord.Forbidden):
+                    return
+
+                if message.attachments:
+                    for attachment in message.attachments:
+                        # Note: 'webp' is excluded here because standard Discord avatars usually require PNG/JPG/GIF formats.
+                        if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'gif']):
+                            try:
+                                # Read the image file as bytes
+                                image_bytes = await attachment.read()
+
+                                # Edit the bot's user profile with the new bytes
+                                await self.user.edit(avatar=image_bytes)
+                                logger.info(f"Successfully updated bot profile picture to {attachment.filename}!")
+
+                                # Break out of the loop so we only process the first valid image
+                                break
+                            except discord.HTTPException as e:
+                                # Discord heavily rate-limits avatar changes (usually a few times an hour).
+                                logger.error(f"Failed to update avatar (may be rate-limited): {e}")
             else:
                 logger.info("Threshold not met (or already surpassed), skipping embed creation.")
 
