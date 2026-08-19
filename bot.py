@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from cogs.basic import Basic
 from cogs.channel import Channel
+from cogs.chess import ChessEvent
 from cogs.roles import Roles
 import discord
 from discord.ext import commands
@@ -10,6 +11,7 @@ from cogs.level import LevelCog
 import config
 from config import GUILD_ID
 from utils import roles_system
+from utils.chess_db import ChessSystem
 from utils.debug import Logger
 import os
 from utils.level_system import LevelSystem
@@ -60,6 +62,13 @@ board_system = BoardSystem(
     database=database
 )
 
+chess_system = ChessSystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+
 initial_extensions = [
     "cogs.basic",
     "cogs.embed",
@@ -95,6 +104,8 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.roles")
             await self.add_cog(Channel(self, server_system, board_system))
             logger.info("Loaded extension: cogs.channel")
+            await self.add_cog(ChessEvent(self, chess_system))
+            logger.info("Loaded extension: cogs.chess")
         except Exception as e:
             logger.error(f"Failed to load extension", exc_info=e)
 
@@ -215,10 +226,15 @@ class DiscordBot(commands.Bot):
         print(channels)
 
         if channels:
-            for channel_id, desc in channels:
-                channel = self.get_channel(channel_id)
-                if channel:
-                    embed.add_field(name=desc, value=channel.mention, inline=False)
+            for item in channels:
+                # Check if the item is actually a tuple/list with 2 elements before unpacking
+                if isinstance(item, (tuple, list)) and len(item) == 2:
+                    channel_id, desc = item
+                    channel = self.get_channel(channel_id)
+                    if channel:
+                        embed.add_field(name=desc, value=channel.mention, inline=False)
+                else:
+                    logger.warning(f"Unexpected data format in channels list: {item}")
 
         # FIX AVATAR: Se l'utente non ha un avatar personalizzato, usa quello di default di Discord
         avatar_url = member.avatar.url if member.avatar else member.default_avatar.url

@@ -131,12 +131,18 @@ class ServerSystem(BaseDatabase):
 
     def get_channels(self, guild_id):
         cursor = self.get_cursor()
+        # Make sure you are selecting BOTH the channel_id and the description column
         cursor.execute("""
-                        SELECT channel_id, description FROM channels WHERE guild_id = %s AND description NOT IN ('level', 'announce')
+                       SELECT channel_id, description
+                       FROM channels
+                       WHERE guild_id = %s
                        """, (guild_id,))
-        result = cursor.fetchall()
+
+        results = cursor.fetchall()
         cursor.close()
-        return result[0] if result else []
+
+        # fetchall() automatically returns a list of tuples: [(id1, desc1), (id2, desc2)]
+        return results
 
     def set_role(self, guild_id, role_id):
         cursor = self.get_cursor(buffered = True)

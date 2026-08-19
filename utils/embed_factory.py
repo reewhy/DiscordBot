@@ -11,7 +11,7 @@ class EmbedFactory:
     
     # Default values for embed creation
     DEFAULT_TITLE = "Discord Bot"
-    AUTHOR_NAME = "Luca"
+    AUTHOR_NAME = ""
     AUTHOR_URL = "https://github.com/reewhy"
 
     @staticmethod
