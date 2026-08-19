@@ -1,4 +1,3 @@
-import mysql.connector
 from utils.database import BaseDatabase
 
 
@@ -16,7 +15,7 @@ class ChessSystem(BaseDatabase):
                            user_id
                            BIGINT,
                            score
-                           INT
+                           DOUBLE
                            DEFAULT
                            0,
                            PRIMARY
@@ -97,6 +96,16 @@ class ChessSystem(BaseDatabase):
         self.conn.commit()
         cursor.close()
 
+    def drop_tables(self):
+        cursor = self.get_cursor()
+
+        cursor.execute("DROP TABLE IF EXISTS players_matches")
+        cursor.execute("DROP TABLE IF EXISTS players")
+        cursor.execute("DROP TABLE IF EXISTS matches")
+
+        self.conn.commit()
+        cursor.close()
+
     def get_all_players(self):
         cursor = self.get_cursor()
         cursor.execute("SELECT user_id FROM players")
@@ -160,6 +169,43 @@ class ChessSystem(BaseDatabase):
         cursor.close()
         return both_ready
 
+    def get_player_matches(self, user_id):
+        """Recupera tutte le partite di un giocatore (sia passate che future)."""
+        cursor = self.get_cursor()
+
+        # Uniamo pm1 (il giocatore) con pm2 (l'avversario) e matches
+        cursor.execute("""
+                       SELECT m.match_id, m.status, pm2.player AS opponent_id, m.winner
+                       FROM players_matches pm1
+                                JOIN matches m ON pm1.match_id = m.match_id
+                                JOIN players_matches pm2 ON m.match_id = pm2.match_id AND pm2.player != pm1.player
+                       WHERE pm1.player = %s
+                       ORDER BY m.match_id DESC
+                       """, (user_id,))
+
+        results = cursor.fetchall()
+        cursor.close()
+
+        matches = {"active": [], "past": []}
+
+        for row in results:
+            match_id, status, opponent_id, winner_id = row
+            match_info = {
+                "match_id": match_id,
+                "opponent_id": opponent_id,
+                "status": status,
+                "winner_id": winner_id
+            }
+
+            # Se la partita è da giocare o in corso
+            if status in ['PENDING', 'STARTED']:
+                matches["active"].append(match_info)
+            # Se la partita è finita o annullata
+            else:
+                matches["past"].append(match_info)
+
+        return matches
+
     def report_result(self, match_id, player_id, result):
         """Player reports 'WIN', 'LOSS', or 'DRAW'."""
         cursor = self.get_cursor()
@@ -205,11 +251,45 @@ class ChessSystem(BaseDatabase):
                            (winner_id, match_id))
 
             # Standard Points: +1 for win. (You can add +1 to both for a draw if you prefer)
-            if winner_id:
+            if winner_id and not is_draw:
+                # Add 1 point to the winner
                 cursor.execute("UPDATE players SET score = score + 1 WHERE user_id = %s", (winner_id,))
 
+            elif is_draw:
+                # Add 0.5 points to BOTH players linked to this match
+                cursor.execute("""
+                               UPDATE players
+                                   JOIN players_matches
+                               ON players.user_id = players_matches.player
+                                   SET players.score = players.score + 0.5
+                               WHERE players_matches.match_id = %s
+                               """, (match_id,))
             self.conn.commit()
         cursor.close()
+
+    def force_resolve_match(self, match_id, winner_id=None, is_draw=False):
+        """Staff method to forcefully resolve a match in case of a dispute."""
+        cursor = self.get_cursor()
+
+        # Check if the match exists and its current status
+        cursor.execute("SELECT status FROM matches WHERE match_id = %s", (match_id,))
+        result = cursor.fetchone()
+
+        if not result:
+            cursor.close()
+            return False, "Match non trovato."
+
+        status = result[0]
+        if status in ['FINISHED', 'CANCELLED']:
+            cursor.close()
+            return False, f"Impossibile risolvere. Il match è già {status}."
+
+        cursor.close()
+
+        # Call the internal method to finalize the points and update the status
+        self._finalize_match(match_id, winner_id, is_draw)
+
+        return True, "Match risolto con successo."
 
     def process_end_of_day_penalties(self):
         """Applies -1 penalty to players who didn't confirm PENDING matches."""
