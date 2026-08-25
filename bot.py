@@ -231,8 +231,8 @@ class DiscordBot(commands.Bot):
                 if isinstance(item, (tuple, list)) and len(item) == 2:
                     channel_id, desc = item
                     channel = self.get_channel(channel_id)
-                    if channel:
-                        embed.add_field(name=desc, value=channel.mention, inline=False)
+                    #if channel:
+                    #    embed.add_field(name=desc, value=channel.mention, inline=False)
                 else:
                     logger.warning(f"Unexpected data format in channels list: {item}")
 
