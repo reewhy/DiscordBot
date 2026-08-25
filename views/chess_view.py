@@ -33,7 +33,7 @@ class MatchResultView(discord.ui.View):
             await interaction.response.edit_message(content=msg, view=self)
 
         elif status == "DISPUTE":
-            msg = f"⚠️ **Disputa nel Match #{self.match_id}!**\nI risultati inseriti non coincidono. Contattate uno staffer."
+            msg = f"⚠️ **Disputa nel Match #{self.match_id}!**\nI risultati inseriti non coincidono. Contattate uno staffer. <@%1539471475885482065>"
             for child in self.children:
                 child.disabled = True
             await interaction.response.edit_message(content=msg, view=self)
