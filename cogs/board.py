@@ -12,6 +12,68 @@ from utils.board_system import BoardSystem
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
 
+class UserShamePagination(discord.ui.View):
+    def __init__(self, target: discord.Member, messages: list, per_page: int = 5):
+        super().__init__(timeout=180)
+        self.target = target
+        self.messages = messages
+        self.per_page = per_page
+        self.current_page = 0
+        self.max_pages = max(1, (len(messages) + per_page - 1) // per_page)
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.prev_button.disabled = self.current_page == 0
+        self.next_button.disabled = self.current_page == self.max_pages - 1
+
+    def create_embed(self):
+        embed = EmbedFactory.create_embed(
+            title=f"📜 I messaggi di {self.target.display_name}",
+            description=f"Pagina {self.current_page + 1} di {self.max_pages} (Totale: {len(self.messages)})",
+            colour=discord.Color.purple()
+        )
+
+        avatar_url = self.target.avatar.url if self.target.avatar else self.target.default_avatar.url
+        embed.set_thumbnail(url=avatar_url)
+
+        start = self.current_page * self.per_page
+        end = start + self.per_page
+        page_messages = self.messages[start:end]
+
+        for idx, (b_msg, reactions) in enumerate(page_messages, start + 1):
+            desc = b_msg.embeds[0].description if b_msg.embeds else ""
+
+            # Estrazione sicura del link originale e pulizia del testo
+            match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
+            jump_url = match.group(1) if match else b_msg.jump_url
+
+            clean_desc = desc.split("**[Jump to message!]")[0].strip()
+            if not clean_desc:
+                text_snippet = "*[Solo Immagine/Allegato]*"
+            else:
+                text_snippet = (clean_desc[:60] + "...") if len(clean_desc) > 60 else clean_desc
+
+            embed.add_field(
+                name=f"#{idx} - (⭐ {reactions})",
+                value=f"{text_snippet}\n**[Vai al messaggio]({jump_url})**",
+                inline=False
+            )
+
+        return embed
+
+    @discord.ui.button(label="◀️ Precedente", style=discord.ButtonStyle.blurple)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page -= 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="Successivo ▶️", style=discord.ButtonStyle.blurple)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page += 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+
 class HallOfShameCog(commands.Cog):
     def __init__(self, bot, board_system: BoardSystem):
         self.bot = bot
@@ -106,6 +168,59 @@ class HallOfShameCog(commands.Cog):
                 )
 
             await interaction.followup.send(embed=embed)
+
+        @app_commands.command(name="user_posts",
+                              description="Mostra tutti i messaggi di un utente nella Hall of Shame.")
+        @app_commands.describe(member="L'utente di cui vedere i messaggi (lascia vuoto per te)")
+        async def user_posts(self, interaction: discord.Interaction, member: discord.Member = None):
+            target = member or interaction.user
+            await interaction.response.defer()
+
+            board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
+            if not board_channel_id:
+                await interaction.followup.send("Canale board non configurato.", ephemeral=True)
+                return
+
+            board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
+                board_channel_id)
+
+            cursor = self.board_system.get_cursor(buffered=True)
+            cursor.execute("SELECT boarded, reactions FROM board WHERE boarded != 0")
+            rows = cursor.fetchall()
+            cursor.close()
+
+            boarded_reactions = {int(row[0]): int(row[1]) for row in rows if row[0]}
+
+            target_names = {target.display_name.lower(), target.name.lower()}
+            if hasattr(target, 'global_name') and target.global_name:
+                target_names.add(target.global_name.lower())
+
+            user_messages_list = []
+
+            # Scansiona i messaggi per trovare quelli dell'utente richiesto
+            async for b_msg in board_channel.history(limit=None):
+                if b_msg.id in boarded_reactions and b_msg.embeds:
+                    reactions = boarded_reactions[b_msg.id]
+                    embed = b_msg.embeds[0]
+
+                    if embed.author and embed.author.name:
+                        author_name = embed.author.name
+                        if author_name.lower() in target_names:
+                            user_messages_list.append((b_msg, reactions))
+
+            if not user_messages_list:
+                await interaction.followup.send(
+                    f"Al momento {target.mention} non ha nessun messaggio nella Hall of Shame.", ephemeral=True)
+                return
+
+            # Ordina i messaggi dal più stellato al meno stellato
+            user_messages_list.sort(key=lambda x: x[1], reverse=True)
+
+            # Inizializza la View per la paginazione (5 post per pagina) e invia il primo messaggio
+            view = UserShamePagination(target, user_messages_list, per_page=5)
+            embed = view.create_embed()
+
+            await interaction.followup.send(embed=embed, view=view)
 
         @app_commands.command(name="top", description="Mostra il messaggio in assoluto più da moid/foid del server.")
         async def top_message(self, interaction: discord.Interaction):
