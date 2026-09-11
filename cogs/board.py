@@ -168,6 +168,69 @@ class HallOfShameCog(commands.Cog):
 
             await interaction.response.send_message(embed=embed)
 
+        @app_commands.command(name="user_leaderboard",
+                              description="Mostra la top 10 degli utenti con più stelle totali.")
+        async def user_leaderboard(self, interaction: discord.Interaction):
+            await interaction.response.defer()
+
+            board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
+            if not board_channel_id:
+                await interaction.followup.send("Canale board non configurato.", ephemeral=True)
+                return
+
+            board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
+                board_channel_id)
+
+            # 1. Recupera tutti i messaggi attivi nella board e le loro reazioni
+            cursor = self.board_system.get_cursor(buffered=True)
+            cursor.execute("SELECT boarded, reactions FROM board WHERE boarded != 0")
+            rows = cursor.fetchall()
+            cursor.close()
+
+            boarded_reactions = {int(row[0]): int(row[1]) for row in rows if row[0]}
+
+            user_totals = {}
+            user_posts = {}
+
+            # 2. Scansiona la cronologia del canale per mappare gli embed agli utenti
+            async for b_msg in board_channel.history(limit=None):
+                if b_msg.id in boarded_reactions and b_msg.embeds:
+                    reactions = boarded_reactions[b_msg.id]
+                    embed = b_msg.embeds[0]
+
+                    if embed.author and embed.author.name:
+                        author_name = embed.author.name
+
+                        # Aggiorna il totale delle stelle e il numero di post per quell'utente
+                        user_totals[author_name] = user_totals.get(author_name, 0) + reactions
+                        user_posts[author_name] = user_posts.get(author_name, 0) + 1
+
+            if not user_totals:
+                await interaction.followup.send("Nessun utente trovato nella board!", ephemeral=True)
+                return
+
+            # 3. Ordina gli utenti per numero di stelle (decrescente) e prendi i primi 10
+            sorted_users = sorted(user_totals.items(), key=lambda x: x[1], reverse=True)[:10]
+
+            embed = EmbedFactory.create_embed(
+                title="🏅 Hall of Shame - Classifica Utenti",
+                description="I 10 membri del server che hanno accumulato più disagio in assoluto!",
+                colour=discord.Color.brand_red(),
+                interaction=interaction
+            )
+
+            # 4. Costruisci l'embed con le statistiche
+            for idx, (name, total_stars) in enumerate(sorted_users, 1):
+                posts = user_posts[name]
+                media = round(total_stars / posts, 1)
+                embed.add_field(
+                    name=f"#{idx} - {name}",
+                    value=f"**{total_stars}** ⭐ totali su **{posts}** messaggi (Media: {media} ⭐)",
+                    inline=False
+                )
+
+            await interaction.followup.send(embed=embed)
+
         @app_commands.command(name="user",
                               description="Mostra le statistiche della Hall of Shame per te o per un altro utente.")
         @app_commands.describe(member="Il giocatore di cui vedere le statistiche (lascia vuoto per le tue)")
