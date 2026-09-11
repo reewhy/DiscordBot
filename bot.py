@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import dataclass
 
 from cogs.basic import Basic
+from cogs.board import HallOfShameCog
 from cogs.channel import Channel
 from cogs.chess import ChessEvent
 from cogs.roles import Roles
@@ -106,6 +107,8 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.channel")
             await self.add_cog(ChessEvent(self, chess_system))
             logger.info("Loaded extension: cogs.chess")
+            await self.add_cog(HallOfShameCog(self, board_system))
+            logger.info("Loaded extension: cogs.hall_of_shame")
         except Exception as e:
             logger.error(f"Failed to load extension", exc_info=e)
 
