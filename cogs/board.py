@@ -60,7 +60,7 @@ class HallOfShameCog(commands.Cog):
             return top_messages, None
 
         @app_commands.command(name="leaderboard",
-                              description="Mostra la top 10 dei messaggi più chud del server.")
+                              description="Mostra la top 10 dei messaggi con più reazioni nel server.")
         async def leaderboard(self, interaction: discord.Interaction):
             await interaction.response.defer()
 
@@ -74,8 +74,8 @@ class HallOfShameCog(commands.Cog):
                 return
 
             embed = EmbedFactory.create_embed(
-                title="🏆 Hall of Shame",
-                description="I 10 messaggi più chud del server!",
+                title="🏆 Hall of Shame - Leaderboard",
+                description="I 10 messaggi più leggendari (o imbarazzanti) del server!",
                 colour=discord.Color.gold(),
                 interaction=interaction
             )
@@ -84,19 +84,24 @@ class HallOfShameCog(commands.Cog):
                 original_embed = b_msg.embeds[0] if b_msg.embeds else None
                 author_name = original_embed.author.name if original_embed and original_embed.author else "Utente Sconosciuto"
 
-                desc = original_embed.description if original_embed else "Nessun testo..."
+                desc = original_embed.description if original_embed else ""
 
+                # Extract the jump link URL
                 match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
                 jump_url = match.group(1) if match else b_msg.jump_url
 
-                clean_desc = desc.split("\n\n**[Jump")[0]
-                text_snippet = (clean_desc[:60] + "...") if len(clean_desc) > 60 else clean_desc
-                if not text_snippet.strip():
-                    text_snippet = "*[Immagine/Allegato]*"
+                # FIX 1: Split by "**[Jump to message!]" to ignore Discord's newline stripping
+                clean_desc = desc.split("**[Jump to message!]")[0].strip()
 
+                if not clean_desc:
+                    text_snippet = "*[Solo Immagine/Allegato]*"
+                else:
+                    text_snippet = (clean_desc[:60] + "...") if len(clean_desc) > 60 else clean_desc
+
+                # FIX 2: Removed markdown wrapping to prevent bleed from user's unclosed markdown
                 embed.add_field(
                     name=f"#{idx} - {author_name} (⭐ {reactions})",
-                    value=f"\"{text_snippet}\"\n**[Vai al messaggio]({jump_url})**",
+                    value=f"{text_snippet}\n[Vai al messaggio]({jump_url})",
                     inline=False
                 )
 
@@ -184,13 +189,19 @@ class HallOfShameCog(commands.Cog):
             rows = cursor.fetchall()
             cursor.close()
 
-            boarded_reactions = {row[0]: row[1] for row in rows}
+            # FIX 1: Explicitly cast to integer to guarantee ID matching
+            boarded_reactions = {int(row[0]): int(row[1]) for row in rows if row[0]}
 
-            user_totals = {}  # Map to calculate leaderboard positions
+            user_totals = {}
             target_stars = 0
             target_boarded_count = 0
             target_best_msg = None
             target_max_stars = 0
+
+            # FIX 2: Create a set of all possible target names (lowercase)
+            target_names = {target.display_name.lower(), target.name.lower()}
+            if hasattr(target, 'global_name') and target.global_name:
+                target_names.add(target.global_name.lower())
 
             # 2. Iterate through the board channel's history to link embeds to users
             async for b_msg in board_channel.history(limit=None):
@@ -200,11 +211,12 @@ class HallOfShameCog(commands.Cog):
 
                     if embed.author and embed.author.name:
                         author_name = embed.author.name
+
                         # Tally total stars for global ranking
                         user_totals[author_name] = user_totals.get(author_name, 0) + reactions
 
-                        # If this message belongs to our target user
-                        if author_name == target.display_name:
+                        # Case-insensitive check across display_name, global_name, and username
+                        if author_name.lower() in target_names:
                             target_boarded_count += 1
                             target_stars += reactions
                             if reactions > target_max_stars:
@@ -221,7 +233,7 @@ class HallOfShameCog(commands.Cog):
             sorted_users = sorted(user_totals.items(), key=lambda x: x[1], reverse=True)
             position = 0
             for idx, (name, total) in enumerate(sorted_users, 1):
-                if name == target.display_name:
+                if name.lower() in target_names:
                     position = idx
                     break
 
@@ -243,19 +255,21 @@ class HallOfShameCog(commands.Cog):
             embed_stats.add_field(name="Media Stelle", value=f"**{avg_stars}** ⭐", inline=True)
 
             if target_best_msg:
-                # Extract original jump link and text snippet
                 desc = target_best_msg.embeds[0].description if target_best_msg.embeds else ""
+
                 match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
                 jump_url = match.group(1) if match else target_best_msg.jump_url
 
-                clean_desc = desc.split("\n\n**[Jump")[0]
-                text_snippet = (clean_desc[:50] + "...") if len(clean_desc) > 50 else clean_desc
-                if not text_snippet.strip():
-                    text_snippet = "*[Immagine/Allegato]*"
+                clean_desc = desc.split("**[Jump to message!]")[0].strip()
+
+                if not clean_desc:
+                    text_snippet = "*[Solo Immagine/Allegato]*"
+                else:
+                    text_snippet = (clean_desc[:50] + "...") if len(clean_desc) > 50 else clean_desc
 
                 embed_stats.add_field(
                     name=f"🌟 Miglior Messaggio (⭐ {target_max_stars})",
-                    value=f"\"{text_snippet}\"\n**[Vai al messaggio]({jump_url})**",
+                    value=f"{text_snippet}\n**[Vai al messaggio]({jump_url})**",
                     inline=False
                 )
 
