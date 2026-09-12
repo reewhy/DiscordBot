@@ -323,11 +323,11 @@ class HallOfShameCog(commands.Cog):
             # Completamente gestito da SQL ora!
             cursor = self.board_system.get_cursor(buffered=True)
             cursor.execute("""
-                           SELECT author_id, SUM(reactions), COUNT(message_id)
+                           SELECT author_id, SUM(reactions) AS total_stars, COUNT(message_id) AS total_posts
                            FROM board
                            WHERE boarded != 0 AND author_id IS NOT NULL
                            GROUP BY author_id
-                           ORDER BY SUM (reactions) DESC
+                           ORDER BY total_stars DESC
                                LIMIT 10
                            """)
             rows = cursor.fetchall()
