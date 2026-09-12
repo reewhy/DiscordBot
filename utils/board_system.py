@@ -30,12 +30,6 @@ class BoardSystem(BaseDatabase):
                            )
                        """)
 
-        # Safe attempt to add the column if the table already exists
-        try:
-            cursor.execute("ALTER TABLE board ADD COLUMN author_id BIGINT")
-        except:
-            pass
-
         # Modificata per salvare le impostazioni per ogni singolo server (guild_id)
         cursor.execute("""
                        CREATE TABLE IF NOT EXISTS board_config

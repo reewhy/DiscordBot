@@ -393,7 +393,7 @@ class HallOfShameCog(commands.Cog):
                     position = idx
                     break
 
-            # Prendi i post dell'utente
+            # Prendi i post dell'utente# Prendi i post dell'utente tramite l'ID di Discord (author_id)
             cursor.execute("SELECT reactions, boarded FROM board WHERE author_id = %s AND boarded != 0", (target.id,))
             user_posts = cursor.fetchall()
             cursor.close()
