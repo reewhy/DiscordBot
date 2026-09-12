@@ -20,6 +20,8 @@ class BoardSystem(BaseDatabase):
                            INT,
                            boarded
                            BIGINT,
+                           author_id
+                           BIGINT,
                            PRIMARY
                            KEY
                        (
@@ -27,6 +29,12 @@ class BoardSystem(BaseDatabase):
                        )
                            )
                        """)
+
+        # Safe attempt to add the column if the table already exists
+        try:
+            cursor.execute("ALTER TABLE board ADD COLUMN author_id BIGINT")
+        except:
+            pass
 
         # Modificata per salvare le impostazioni per ogni singolo server (guild_id)
         cursor.execute("""
@@ -131,9 +139,9 @@ class BoardSystem(BaseDatabase):
         self.conn.commit()
         cursor.close()
 
-    def add_boarded(self, message_id, board_index):
+    def add_boarded(self, message_id, board_index, author_id):
         cursor = self.get_cursor(buffered=True)
-        cursor.execute("UPDATE board SET boarded = %s WHERE message_id = %s", (board_index, message_id))
+        cursor.execute("UPDATE board SET boarded = %s, author_id = %s WHERE message_id = %s", (board_index, author_id, message_id))
         self.conn.commit()
         cursor.close()
 

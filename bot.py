@@ -359,7 +359,7 @@ class DiscordBot(commands.Bot):
                             content="get a load of this chud...", embed=embed)
                         logger.info("Successfully sent featured message to board channel!")
 
-                        board_system.add_boarded(payload.message_id, sent_msg.id)
+                        board_system.add_boarded(payload.message_id, sent_msg.id, message.author.id)
                         logger.info(f"Saved to DB: Original {payload.message_id} -> Board {sent_msg.id}")
                     else:
                         logger.error(f"Board channel {channel_id} not found.")

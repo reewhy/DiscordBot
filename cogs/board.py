@@ -43,7 +43,6 @@ class UserShamePagination(discord.ui.View):
         for idx, (b_msg, reactions) in enumerate(page_messages, start + 1):
             desc = b_msg.embeds[0].description if b_msg.embeds else ""
 
-            # Estrazione sicura del link originale e pulizia del testo
             match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
             jump_url = match.group(1) if match else b_msg.jump_url
 
@@ -87,8 +86,56 @@ class HallOfShameCog(commands.Cog):
             self.board_system = board_system
             self.bot = bot
 
+        # --- COMMAND TO FIX OLD MESSAGES (STAFF ONLY) ---
+        @app_commands.command(name="fix_database",
+                              description="[STAFF] Associa gli ID utente ai vecchi messaggi della board.")
+        @app_commands.checks.has_permissions(administrator=True)
+        async def fix_database(self, interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
+            board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
+                board_channel_id)
+
+            cursor = self.board_system.get_cursor(buffered=True)
+
+            # Make sure column exists before migrating
+            try:
+                cursor.execute("ALTER TABLE board ADD COLUMN author_id BIGINT")
+                self.board_system.conn.commit()
+            except:
+                pass
+
+            updated = 0
+            await interaction.followup.send("Inizio migrazione del database... Potrebbe volerci qualche secondo.",
+                                            ephemeral=True)
+
+            async for b_msg in board_channel.history(limit=None):
+                if b_msg.embeds:
+                    desc = b_msg.embeds[0].description if b_msg.embeds[0].description else ""
+
+                    match = re.search(r'channels/\d+/(\d+)/(\d+)', desc)
+                    if match:
+                        channel_id = int(match.group(1))
+                        msg_id = int(match.group(2))
+
+                        try:
+                            orig_channel = interaction.guild.get_channel(
+                                channel_id) or await interaction.guild.fetch_channel(channel_id)
+                            orig_msg = await orig_channel.fetch_message(msg_id)
+                            author_id = orig_msg.author.id
+
+                            cursor.execute("UPDATE board SET author_id = %s WHERE boarded = %s", (author_id, b_msg.id))
+                            updated += 1
+                        except Exception:
+                            pass  # Message deleted or inaccessible
+
+            self.board_system.conn.commit()
+            cursor.close()
+
+            await interaction.edit_original_response(
+                content=f"✅ Migrazione completata! Ho aggiornato **{updated}** vecchi messaggi con i corretti ID utente.")
+
         async def get_top_messages(self, interaction: discord.Interaction, limit: int = 10):
-            """Helper per ottenere i messaggi più stellati."""
             board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
             if not board_channel_id:
                 return None, "Canale board non configurato. Usa /setboard."
@@ -116,7 +163,7 @@ class HallOfShameCog(commands.Cog):
                     b_msg = await board_channel.fetch_message(boarded_id)
                     top_messages.append((b_msg, reactions))
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logger.warning(f"Boarded message {boarded_id} non trovato. Probabilmente eliminato.")
+                    logger.warning(f"Boarded message {boarded_id} non trovato.")
                     continue
 
             return top_messages, None
@@ -145,14 +192,11 @@ class HallOfShameCog(commands.Cog):
             for idx, (b_msg, reactions) in enumerate(top_messages, 1):
                 original_embed = b_msg.embeds[0] if b_msg.embeds else None
                 author_name = original_embed.author.name if original_embed and original_embed.author else "Utente Sconosciuto"
-
                 desc = original_embed.description if original_embed else ""
 
-                # Extract the jump link URL
                 match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
                 jump_url = match.group(1) if match else b_msg.jump_url
 
-                # FIX 1: Split by "**[Jump to message!]" to ignore Discord's newline stripping
                 clean_desc = desc.split("**[Jump to message!]")[0].strip()
 
                 if not clean_desc:
@@ -160,7 +204,6 @@ class HallOfShameCog(commands.Cog):
                 else:
                     text_snippet = (clean_desc[:60] + "...") if len(clean_desc) > 60 else clean_desc
 
-                # FIX 2: Removed markdown wrapping to prevent bleed from user's unclosed markdown
                 embed.add_field(
                     name=f"#{idx} - {author_name} (⭐ {reactions})",
                     value=f"{text_snippet}\n[Vai al messaggio]({jump_url})",
@@ -184,39 +227,29 @@ class HallOfShameCog(commands.Cog):
             board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
                 board_channel_id)
 
+            # Query SQL diretta usando author_id
             cursor = self.board_system.get_cursor(buffered=True)
-            cursor.execute("SELECT boarded, reactions FROM board WHERE boarded != 0")
+            cursor.execute(
+                "SELECT boarded, reactions FROM board WHERE author_id = %s AND boarded != 0 ORDER BY reactions DESC",
+                (target.id,))
             rows = cursor.fetchall()
             cursor.close()
 
-            boarded_reactions = {int(row[0]): int(row[1]) for row in rows if row[0]}
-
-            target_names = {target.display_name.lower(), target.name.lower()}
-            if hasattr(target, 'global_name') and target.global_name:
-                target_names.add(target.global_name.lower())
-
-            user_messages_list = []
-
-            # Scansiona i messaggi per trovare quelli dell'utente richiesto
-            async for b_msg in board_channel.history(limit=None):
-                if b_msg.id in boarded_reactions and b_msg.embeds:
-                    reactions = boarded_reactions[b_msg.id]
-                    embed = b_msg.embeds[0]
-
-                    if embed.author and embed.author.name:
-                        author_name = embed.author.name
-                        if author_name.lower() in target_names:
-                            user_messages_list.append((b_msg, reactions))
-
-            if not user_messages_list:
+            if not rows:
                 await interaction.followup.send(
-                    f"Al momento {target.mention} non ha nessun messaggio nella Hall of Shame.", ephemeral=True)
+                    f"Al momento {target.mention} non ha nessun messaggio nella Hall of Shame. (Se hai aggiornato ora il bot, usa prima `/shame fix_database`)",
+                    ephemeral=True)
                 return
 
-            # Ordina i messaggi dal più stellato al meno stellato
-            user_messages_list.sort(key=lambda x: x[1], reverse=True)
+            user_messages_list = []
+            for row in rows:
+                boarded_id, reactions = row
+                try:
+                    b_msg = await board_channel.fetch_message(boarded_id)
+                    user_messages_list.append((b_msg, reactions))
+                except:
+                    continue
 
-            # Inizializza la View per la paginazione (5 post per pagina) e invia il primo messaggio
             view = UserShamePagination(target, user_messages_list, per_page=5)
             embed = view.create_embed()
 
@@ -236,7 +269,6 @@ class HallOfShameCog(commands.Cog):
                 return
 
             best_msg, reactions = top_messages[0]
-
             original_embed = best_msg.embeds[0] if best_msg.embeds else None
 
             embed = EmbedFactory.create_embed(
@@ -288,44 +320,23 @@ class HallOfShameCog(commands.Cog):
         async def user_leaderboard(self, interaction: discord.Interaction):
             await interaction.response.defer()
 
-            board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
-            if not board_channel_id:
-                await interaction.followup.send("Canale board non configurato.", ephemeral=True)
-                return
-
-            board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
-                board_channel_id)
-
-            # 1. Recupera tutti i messaggi attivi nella board e le loro reazioni
+            # Completamente gestito da SQL ora!
             cursor = self.board_system.get_cursor(buffered=True)
-            cursor.execute("SELECT boarded, reactions FROM board WHERE boarded != 0")
+            cursor.execute("""
+                           SELECT author_id, SUM(reactions), COUNT(message_id)
+                           FROM board
+                           WHERE boarded != 0 AND author_id IS NOT NULL
+                           GROUP BY author_id
+                           ORDER BY SUM (reactions) DESC
+                               LIMIT 10
+                           """)
             rows = cursor.fetchall()
             cursor.close()
 
-            boarded_reactions = {int(row[0]): int(row[1]) for row in rows if row[0]}
-
-            user_totals = {}
-            user_posts = {}
-
-            # 2. Scansiona la cronologia del canale per mappare gli embed agli utenti
-            async for b_msg in board_channel.history(limit=None):
-                if b_msg.id in boarded_reactions and b_msg.embeds:
-                    reactions = boarded_reactions[b_msg.id]
-                    embed = b_msg.embeds[0]
-
-                    if embed.author and embed.author.name:
-                        author_name = embed.author.name
-
-                        # Aggiorna il totale delle stelle e il numero di post per quell'utente
-                        user_totals[author_name] = user_totals.get(author_name, 0) + reactions
-                        user_posts[author_name] = user_posts.get(author_name, 0) + 1
-
-            if not user_totals:
-                await interaction.followup.send("Nessun utente trovato nella board!", ephemeral=True)
+            if not rows:
+                await interaction.followup.send("Nessun utente trovato! (Usa `/shame fix_database` prima)",
+                                                ephemeral=True)
                 return
-
-            # 3. Ordina gli utenti per numero di stelle (decrescente) e prendi i primi 10
-            sorted_users = sorted(user_totals.items(), key=lambda x: x[1], reverse=True)[:10]
 
             embed = EmbedFactory.create_embed(
                 title="🏅 Hall of Shame - Classifica Utenti",
@@ -334,9 +345,12 @@ class HallOfShameCog(commands.Cog):
                 interaction=interaction
             )
 
-            # 4. Costruisci l'embed con le statistiche
-            for idx, (name, total_stars) in enumerate(sorted_users, 1):
-                posts = user_posts[name]
+            for idx, row in enumerate(rows, 1):
+                author_id, total_stars, posts = row
+                total_stars = int(total_stars)
+                member = interaction.guild.get_member(author_id)
+                name = member.display_name if member else f"Sconosciuto ({author_id})"
+
                 media = round(total_stars / posts, 1)
                 embed.add_field(
                     name=f"#{idx} - {name}",
@@ -361,61 +375,49 @@ class HallOfShameCog(commands.Cog):
             board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
                 board_channel_id)
 
-            # 1. Grab all active boarded messages and their reactions from the database
             cursor = self.board_system.get_cursor(buffered=True)
-            cursor.execute("SELECT boarded, reactions FROM board WHERE boarded != 0")
-            rows = cursor.fetchall()
-            cursor.close()
 
-            # FIX 1: Explicitly cast to integer to guarantee ID matching
-            boarded_reactions = {int(row[0]): int(row[1]) for row in rows if row[0]}
+            # Calcola la posizione
+            cursor.execute("""
+                           SELECT author_id, SUM(reactions) as total
+                           FROM board
+                           WHERE boarded != 0 AND author_id IS NOT NULL
+                           GROUP BY author_id
+                           ORDER BY total DESC
+                           """)
+            leaderboard = cursor.fetchall()
 
-            user_totals = {}
-            target_stars = 0
-            target_boarded_count = 0
-            target_best_msg = None
-            target_max_stars = 0
-
-            # FIX 2: Create a set of all possible target names (lowercase)
-            target_names = {target.display_name.lower(), target.name.lower()}
-            if hasattr(target, 'global_name') and target.global_name:
-                target_names.add(target.global_name.lower())
-
-            # 2. Iterate through the board channel's history to link embeds to users
-            async for b_msg in board_channel.history(limit=None):
-                if b_msg.id in boarded_reactions and b_msg.embeds:
-                    reactions = boarded_reactions[b_msg.id]
-                    embed = b_msg.embeds[0]
-
-                    if embed.author and embed.author.name:
-                        author_name = embed.author.name
-
-                        # Tally total stars for global ranking
-                        user_totals[author_name] = user_totals.get(author_name, 0) + reactions
-
-                        # Case-insensitive check across display_name, global_name, and username
-                        if author_name.lower() in target_names:
-                            target_boarded_count += 1
-                            target_stars += reactions
-                            if reactions > target_max_stars:
-                                target_max_stars = reactions
-                                target_best_msg = b_msg
-
-            if target_boarded_count == 0:
-                await interaction.followup.send(
-                    f"Al momento {target.mention} non ha nessun messaggio nella Hall of Shame. Troppo poco divertente?",
-                    ephemeral=True)
-                return
-
-            # 3. Calculate their position on the leaderboard
-            sorted_users = sorted(user_totals.items(), key=lambda x: x[1], reverse=True)
             position = 0
-            for idx, (name, total) in enumerate(sorted_users, 1):
-                if name.lower() in target_names:
+            for idx, row in enumerate(leaderboard, 1):
+                if row[0] == target.id:
                     position = idx
                     break
 
+            # Prendi i post dell'utente
+            cursor.execute("SELECT reactions, boarded FROM board WHERE author_id = %s AND boarded != 0", (target.id,))
+            user_posts = cursor.fetchall()
+            cursor.close()
+
+            target_boarded_count = len(user_posts)
+            if target_boarded_count == 0:
+                await interaction.followup.send(
+                    f"Al momento {target.mention} non ha nessun messaggio nella Hall of Shame.", ephemeral=True)
+                return
+
+            target_stars = sum(row[0] for row in user_posts)
             avg_stars = round(target_stars / target_boarded_count, 1)
+
+            # Trova il messaggio top
+            best_post = max(user_posts, key=lambda x: x[0])
+            target_max_stars = best_post[0]
+            best_boarded_id = best_post[1]
+
+            target_best_msg = None
+            try:
+                target_best_msg = await board_channel.fetch_message(best_boarded_id)
+            except:
+                pass
+
             avatar_url = target.avatar.url if target.avatar else target.default_avatar.url
 
             embed_stats = EmbedFactory.create_embed(
@@ -426,20 +428,18 @@ class HallOfShameCog(commands.Cog):
                 interaction=interaction
             )
 
-            embed_stats.add_field(name="Posizione Server", value=f"**#{position}** su {len(user_totals)} utenti",
+            embed_stats.add_field(name="Posizione Server", value=f"**#{position}** su {len(leaderboard)} utenti",
                                   inline=False)
             embed_stats.add_field(name="Post nella Board", value=f"**{target_boarded_count}**", inline=True)
             embed_stats.add_field(name="Stelle Totali", value=f"**{target_stars}** ⭐", inline=True)
             embed_stats.add_field(name="Media Stelle", value=f"**{avg_stars}** ⭐", inline=True)
 
-            if target_best_msg:
-                desc = target_best_msg.embeds[0].description if target_best_msg.embeds else ""
-
+            if target_best_msg and target_best_msg.embeds:
+                desc = target_best_msg.embeds[0].description if target_best_msg.embeds[0].description else ""
                 match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
                 jump_url = match.group(1) if match else target_best_msg.jump_url
 
                 clean_desc = desc.split("**[Jump to message!]")[0].strip()
-
                 if not clean_desc:
                     text_snippet = "*[Solo Immagine/Allegato]*"
                 else:
