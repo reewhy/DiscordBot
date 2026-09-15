@@ -295,6 +295,35 @@ class Moderation(commands.Cog):
         embed.add_field(name="Motivo", value=reason)
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="ban", description="Ban a user.")
+    @app_commands.describe(member="Member to ban.", reason="Reason for the ban.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def kick(self, interaction: discord.Interaction, member: discord.Member,
+                   reason: str = "Nessun motivo specificato"):
+        logger.info(f"Banning user {member.id} ({member.name}) from guild {interaction.guild.id} for reason: {reason}")
+
+        # Invia prima il DM di notifica
+        await self._send_moderation_dm(
+            member=member,
+            action="bannato",
+            guild_name=interaction.guild.name,
+            reason=reason
+        )
+
+        await member.ban(reason=reason)
+
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"⛔ Hai bannato {member.mention}",
+            title="Bannato!",
+            thumbnail=member.display_avatar.url,
+            colour=discord.Color.red(),
+            author="Moderation"
+        )
+        embed.add_field(name="Motivo", value=reason)
+        await interaction.response.send_message(embed=embed)
+
     @app_commands.command(name="delete", description="Delete messages.")
     @app_commands.describe(number="Number of messages to delete (max 100)", member="User to filter messages by")
     @app_commands.checks.has_permissions(administrator=True)
