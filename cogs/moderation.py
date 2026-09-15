@@ -160,7 +160,7 @@ class Moderation(commands.Cog):
         unban_time = datetime.now(timezone.utc).replace(tzinfo=None) + delta
 
         # 2. Esegui il ban
-        # await member.ban(reason=reason)
+        await member.ban(reason=reason)
         logger.info(f"Banned user {member.id} ({member.name}) for {duration}. Unban scheduled at {unban_time}")
 
         # 3. Salva nel DB e programma sban
