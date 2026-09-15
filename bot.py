@@ -191,7 +191,7 @@ class DiscordBot(commands.Bot):
                         )
 
                         await birthday_channel.send(
-                            content=f"<@&{bd_role_id}>! 🎈",
+                            content=f"<@&{bd_role_id}> {member.mention}! 🎈",
                             embed=embed,
                         )
                         logger.info(f"Sent debug birthday message for user {member.name} in guild {guild.name}")
