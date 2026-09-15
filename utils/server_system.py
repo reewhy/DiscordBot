@@ -129,6 +129,15 @@ class ServerSystem(BaseDatabase):
         cursor.close()
         return result[0] if result else None
 
+    def get_birthday_channel(self, guild_id):
+        cursor = self.get_cursor(buffered=True)
+        cursor.execute("""
+            SELECT channel_id FROM channels WHERE guild_id = %s AND description="birthday"
+        """, (guild_id,))
+        result = cursor.fetchone()
+        cursor.close()
+        return result[0] if result else None
+
     def get_channels(self, guild_id):
         cursor = self.get_cursor()
         # Make sure you are selecting BOTH the channel_id and the description column

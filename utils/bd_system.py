@@ -31,8 +31,13 @@ class BirthdaySystem(BaseDatabase):
 
     def remove_birthday(self, user_id):
         cursor = self.get_cursor()
-        cursor.execute("""
-                       REMOVE FROM birthdays WHERE user_id = %s""", (user_id,))
+        cursor.execute(
+            """
+            DELETE
+            FROM birthdays
+            WHERE user_id = %s""",
+            (user_id,),
+        )
         self.conn.commit()
         cursor.close()
 
@@ -40,9 +45,26 @@ class BirthdaySystem(BaseDatabase):
         cursor = self.get_cursor()
         cursor.execute("""
                        SELECT birthday FROM birthdays WHERE user_id = %s""", (user_id,))
-        result = cursor.fetchone()[0]
+        result = cursor.fetchone()
         cursor.close()
 
         if result:
             return result
         return None
+
+    def get_birthdays(self, date):
+        cursor = self.get_cursor()
+        cursor.execute(
+            """
+            SELECT user_id
+            FROM birthdays
+            WHERE DAY (birthday) = %s
+              AND MONTH (birthday) = %s
+            """,
+            (date.day, date.month),
+        )
+
+        result = cursor.fetchall()
+        cursor.close()
+
+        return result if result else []

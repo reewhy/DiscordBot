@@ -2,16 +2,18 @@ import asyncio
 from dataclasses import dataclass
 
 from cogs.basic import Basic
+from cogs.birthday import BirthdayCog
 from cogs.board import HallOfShameCog
 from cogs.channel import Channel
 from cogs.chess import ChessEvent
 from cogs.roles import Roles
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from cogs.level import LevelCog
 import config
 from config import GUILD_ID
 from utils import roles_system
+from utils.bd_system import BirthdaySystem
 from utils.chess_db import ChessSystem
 from utils.debug import Logger
 import os
@@ -23,6 +25,11 @@ from utils.roles_system import RoleSystem
 from utils.server_system import ServerSystem
 from utils.board_system import BoardSystem
 from views.ticket_view import TicketView, TicketControlView
+
+import discord.ext.tasks
+
+import asyncio
+import datetime as dt
 
 # Initilize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
@@ -70,6 +77,13 @@ chess_system = ChessSystem(
     database=database
 )
 
+bd_system = BirthdaySystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+
 initial_extensions = [
     "cogs.basic",
     "cogs.embed",
@@ -109,6 +123,8 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.chess")
             await self.add_cog(HallOfShameCog(self, board_system))
             logger.info("Loaded extension: cogs.hall_of_shame")
+            await self.add_cog(BirthdayCog(self, bd_system))
+            logger.info("Loaded extension: cogs.birthday")
         except Exception as e:
             logger.error(f"Failed to load extension", exc_info=e)
 
@@ -122,6 +138,69 @@ class DiscordBot(commands.Bot):
         logger.info("Setting up ticket view")
         self.add_view(TicketView())
         self.add_view(TicketControlView())
+
+    @tasks.loop(hours=24)
+    async def check_birthday(self):
+        today = dt.date.today()
+        logger.info(f"Running debug birthday check for {today}")
+
+        bd_role_id = 1549205110826082355
+
+        try:
+            # Fetch all users who have a birthday today
+            rows = bd_system.get_birthdays(today)
+            if not rows:
+                logger.info("No birthdays found for today.")
+                return
+
+            for guild in self.guilds:
+                guild_id = guild.id
+
+                # 1. Fetch birthday channel from server_system
+                channel_id = server_system.get_birthday_channel(guild_id)
+                if not channel_id:
+                    continue
+
+                birthday_channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+                if not birthday_channel:
+                    continue
+
+                # 2. Congratulate each birthday person in this guild
+                for row in rows:
+                    user_id = row[0]
+                    try:
+                        member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+                        if not member:
+                            continue  # User is not in this specific guild
+
+                        # Create cute embed for the user
+                        embed = EmbedFactory.create_embed(
+                            title="🎂 Buon Compleanno! 🎉",
+                            description=(
+                                f"Tanti auguri di buon compleanno a {member.mention}! 🥳\n"
+                                " Ti auguriamo una giornata fantastica piena di gioia e"
+                                " di tante cose belle! 💖"
+                            ),
+                            colour=discord.Color.from_rgb(255, 182, 193),  # Light pink/festive
+                            author="Birthday System",
+                            thumbnail=(
+                                member.avatar.url
+                                if member.avatar
+                                else member.default_avatar.url
+                            ),
+                        )
+
+                        await birthday_channel.send(
+                            content=f"<@&{bd_role_id}>! 🎈",
+                            embed=embed,
+                        )
+                        logger.info(f"Sent debug birthday message for user {member.name} in guild {guild.name}")
+
+                    except discord.HTTPException as e:
+                        logger.error(f"Failed to send birthday message for user {user_id}: {e}")
+
+        except Exception as e:
+            logger.error("Error occurred during check_birthday loop execution", exc_info=e)
 
     async def on_ready(self):
         logger.info(f"We have logged in as {bot.user.name} (ID: {bot.user.id}")
@@ -150,6 +229,7 @@ class DiscordBot(commands.Bot):
             )
             # await self.announce_channel.send(embed=embed)
             # await self.meme.send(content='')
+            self.check_birthday.start()
         except Exception as e:
             logger.error("Failed to update presence", exc_info=e)
 
@@ -485,6 +565,7 @@ class DiscordBot(commands.Bot):
                 logger.info(f"Removed role: {role.name} from {member.name}")
         except discord.NotFound:
             logger.warning(f"Role with ID {role_id} not found in guild {guild.id}")
+
 
 bot = DiscordBot()
 channel = None

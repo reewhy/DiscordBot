@@ -86,6 +86,7 @@ class Channel(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.guilds(*GUILD_ID)
+    @app_commands.checks.has_role(1539463835931377765)
     class Set(app_commands.Group):
         # Aggiunto board_system nei parametri
         def __init__(self, server_system: ServerSystem, bot: commands.Bot, board_system: BoardSystem):
@@ -97,6 +98,7 @@ class Channel(commands.Cog):
 
         # --- NUOVO COMANDO PER LA BOARD ---
         @app_commands.command(name="board", description="Set this channel as the board channel.")
+        @app_commands.checks.has_role(1539463835931377765)
         @app_commands.guilds(*GUILD_ID)
         async def board(self, interaction: discord.Interaction):
             self.board_system.set_board_channel(interaction.guild_id, interaction.channel_id)
@@ -115,6 +117,7 @@ class Channel(commands.Cog):
         # ----------------------------------
 
         @app_commands.command(name="level", description="Set this channel as level channel.")
+        @app_commands.checks.has_role(1539463835931377765)
         @app_commands.guilds(*GUILD_ID)
         async def level(self, interaction: discord.Interaction):
             self.server_system.add_channel(interaction.guild_id, interaction.channel_id, "level")
@@ -132,6 +135,7 @@ class Channel(commands.Cog):
 
         @app_commands.command(name="announcements", description="Set this channel as announcements channel.")
         @app_commands.guilds(*GUILD_ID)
+        @app_commands.checks.has_role(1539463835931377765)
         async def announcements(self, interaction: discord.Interaction):
             self.server_system.add_channel(interaction.guild_id, interaction.channel_id, "announce")
             embed = EmbedFactory.create_embed(
@@ -145,7 +149,24 @@ class Channel(commands.Cog):
             logger.info(f"{interaction.channel.name} set as announcements channel.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        @app_commands.command(name="birthday", description="Set this channel as birthday channel.")
+        @app_commands.guilds(*GUILD_ID)
+        @app_commands.checks.has_role(1539463835931377765)
+        async def birthday(self, interaction: discord.Interaction):
+            self.server_system.add_channel(interaction.guild_id, interaction.channel_id, "birthday")
+
+            confirm_embed = EmbedFactory.create_embed(
+                title="Birthday channel set",
+                description=f"You've set {interaction.channel.mention} as the birthday channel.",
+                colour=discord.Color.green(),
+                author="Server System",
+                interaction=interaction
+            )
+            await interaction.response.send_message(embed=confirm_embed, ephemeral=True)
+            logger.info(f"{interaction.channel.name} set as birthday channel.")
+
         @app_commands.command(name="ticket", description="Set this channel as ticket channel.")
+        @app_commands.checks.has_role(1539463835931377765)
         @app_commands.guilds(*GUILD_ID)
         async def ticket(self, interaction: discord.Interaction):
             # 1. Register the channel in your system
@@ -177,6 +198,7 @@ class Channel(commands.Cog):
         @app_commands.command(name="add",
                               description="Add a new channel, the channel added will be shown in announcements.")
         @app_commands.describe(description="Description of added channel")
+        @app_commands.checks.has_role(1539463835931377765)
         @app_commands.guilds(*GUILD_ID)
         async def add(self, interaction: discord.Interaction, description: str, channel: discord.TextChannel = None):
             self.server_system.add_channel(interaction.guild_id,
@@ -195,6 +217,7 @@ class Channel(commands.Cog):
         @app_commands.command(name="announce", description="Announce something in announcement chat.")
         @app_commands.describe(value="Message to announce", title="Title of the announcement",
                                author="Author of the announcemnt")
+        @app_commands.checks.has_role(1539463835931377765)
         @app_commands.guilds(*GUILD_ID)
         async def announce(self, interaction: discord.Interaction, title: str, value: str,
                            author: str = "Server System"):
@@ -217,6 +240,7 @@ class Channel(commands.Cog):
         @app_commands.command(name="description", description="Set server description, %u = user mention")
         @app_commands.describe(value="Description for the join message")
         @app_commands.guilds(*GUILD_ID)
+        @app_commands.checks.has_role(1539463835931377765)
         async def desc(self, interaction: discord.Interaction, value: str):
             self.server_system.set_description(interaction.guild_id, value)
 
