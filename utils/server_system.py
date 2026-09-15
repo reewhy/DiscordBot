@@ -120,6 +120,15 @@ class ServerSystem(BaseDatabase):
         cursor.close()
         return result
 
+    def get_log_channel(self, guild_id):
+        cursor = self.get_cursor(buffered = True)
+        cursor.execute("""
+                        SELECT channel_id FROM channels WHERE guild_id = %s AND description="log"
+                       """, (guild_id,))
+        result = cursor.fetchone()
+        cursor.close()
+        return result
+
     def get_announce_channel(self, guild_id):
         cursor = self.get_cursor(buffered = True)
         cursor.execute("""

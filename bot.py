@@ -7,6 +7,7 @@ from cogs.board import HallOfShameCog
 from cogs.channel import Channel
 from cogs.chess import ChessEvent
 from cogs.roles import Roles
+from cogs.mod_logs import ModLogs
 import discord
 from discord.ext import commands, tasks
 from cogs.level import LevelCog
@@ -35,6 +36,8 @@ logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
 intents = discord.Intents.all()
 intents.message_content = True
+intents.voice_states = True
+intents.members = True
 
 DM_CATEGORY_ID = 1549228463133818930
 
@@ -167,6 +170,8 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.hall_of_shame")
             await self.add_cog(BirthdayCog(self, bd_system))
             logger.info("Loaded extension: cogs.birthday")
+            await self.add_cog(ModLogs(self, server_system))
+            logger.info("Loaded extension: cogs.mod_logs")
         except Exception as e:
             logger.error("Failed to load extension", exc_info=e)
 

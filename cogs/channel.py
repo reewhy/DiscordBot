@@ -149,6 +149,22 @@ class Channel(commands.Cog):
             logger.info(f"{interaction.channel.name} set as announcements channel.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        @app_commands.command(name="log", description="Set this channel as logging channel.")
+        @app_commands.guilds(*GUILD_ID)
+        @app_commands.checks.has_role(1539463835931377765)
+        async def log(self, interaction: discord.Interaction):
+            self.server_system.add_channel(interaction.guild_id, interaction.channel_id, "log")
+            embed = EmbedFactory.create_embed(
+                title="Logging channel set",
+                description=f"You've set {interaction.channel.mention} as logging channel.",
+                colour=discord.Color.green(),
+                author="Server System",
+                interaction=interaction
+            )
+
+            logger.info(f"{interaction.channel.name} set as logging channel.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
         @app_commands.command(name="birthday", description="Set this channel as birthday channel.")
         @app_commands.guilds(*GUILD_ID)
         @app_commands.checks.has_role(1539463835931377765)
