@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 from utils.embed_factory import EmbedFactory
 from utils.board_system import BoardSystem
@@ -16,25 +16,19 @@ logger = Logger(os.path.basename(__file__).replace(".py", ""))
 def parse_duration(duration_str: str) -> timedelta:
     """
     Parses a duration string and returns a corresponding timedelta.
-
-    Args:
-        duration_str (str): The duration string (e.g., '10m', '2h').
-
-    Returns:
-        timedelta: A timedelta object representing the parsed duration.
-    
-    Raises:
-        ValueError: If the duration string format is invalid.
     """
     try:
-        num = int(duration_str[:-1])  # Extract the number
-        unit = duration_str[-1]  # Extract the unit
-        return timedelta(**{
-            's': {'seconds': num},
-            'm': {'minutes': num},
-            'h': {'hours': num},
-            'd': {'days': num}
-        }.get(unit, {}))
+        num = int(duration_str[:-1])
+        unit = duration_str[-1].lower()
+        mapping = {
+            's': 'seconds',
+            'm': 'minutes',
+            'h': 'hours',
+            'd': 'days'
+        }
+        if unit not in mapping:
+            raise ValueError(f"Unrecognized time unit '{unit}'")
+        return timedelta(**{mapping[unit]: num})
     except Exception as e:
         logger.error(f"Error parsing duration '{duration_str}': {e}")
         raise ValueError(f"Invalid duration format: {duration_str}") from e
@@ -45,12 +39,6 @@ class Moderation(commands.Cog):
     """
 
     def __init__(self, bot):
-        """
-        Initializes the Moderation cog.
-
-        Args:
-            bot (discord.Bot): The bot instance.
-        """
         self.bot = bot
         self.db = ModerationSystem(
             host="localhost",
@@ -67,18 +55,46 @@ class Moderation(commands.Cog):
         self.next_unban_time = None
         self.unban_task = self.bot.loop.create_task(self._update_next_unban_time())
 
+    async def _send_moderation_dm(self, member: discord.Member, action: str, guild_name: str, reason: str, duration: str = None):
+        """
+        Sends an informative DM to the user before they are kicked/banned.
+        """
+        try:
+            desc = (
+                f"Sei stato **{action}** da **{guild_name}**.\n\n"
+                f"📝 **Motivo:** {reason}\n"
+            )
+            if duration:
+                desc += f"⏳ **Durata:** `{duration}`\n"
+
+            desc += (
+                "\n📩 *Nota:* Scrivendo un messaggio diretto a questo bot entrerai in contatto "
+                "con lo staff per supporto o chiarimenti."
+            )
+
+            embed = discord.Embed(
+                title=f"Avviso di Moderazione: {action.capitalize()}",
+                description=desc,
+                color=discord.Color.red(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            if member.guild.icon:
+                embed.set_thumbnail(url=member.guild.icon.url)
+
+            await member.send(embed=embed)
+            logger.info(f"Notified {member.id} ({member.name}) via DM of action: {action}")
+        except discord.Forbidden:
+            logger.warning(f"Could not deliver DM to {member.id} ({member.name}): DMs disabled or bot blocked.")
+        except Exception as e:
+            logger.error(f"Error sending moderation DM to {member.id}: {e}")
+
     @app_commands.command(name="setminreactions", description="Imposta il numero minimo di reazioni per la board.")
     @app_commands.describe(amount="Numero minimo di reazioni richieste (es. 3).")
     @app_commands.checks.has_any_role(1530983265467498636, 1516814689110200381)
     @app_commands.guilds(*GUILD_ID)
     async def setminreactions(self, interaction: discord.Interaction, amount: int):
-        """
-        Sets the minimum amount of reactions required for a message to be boarded.
-        """
-        logger.info(
-            f"Admin {interaction.user.name} changing min reactions to {amount} for guild {interaction.guild_id}")
+        logger.info(f"Admin {interaction.user.name} changing min reactions to {amount} for guild {interaction.guild_id}")
 
-        # Controllo che il numero sia valido
         if amount < 1:
             embed = EmbedFactory.create_embed(
                 interaction=interaction,
@@ -90,10 +106,8 @@ class Moderation(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        # Aggiorna il database (usando asyncio.to_thread perché la chiamata DB è sincrona)
         await asyncio.to_thread(self.board_db.set_min_reactions, interaction.guild_id, amount)
 
-        # Invia messaggio di conferma
         embed = EmbedFactory.create_embed(
             interaction=interaction,
             description=f"✅ Il numero minimo di reazioni per la board è stato impostato a **{amount}**.",
@@ -101,8 +115,6 @@ class Moderation(commands.Cog):
             colour=discord.Color.green(),
             author="Moderation"
         )
-
-        # Ephemeral=True così solo chi esegue il comando (l'admin) vede la risposta
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="tempban", description="Temporarily ban a user.")
@@ -111,94 +123,88 @@ class Moderation(commands.Cog):
         reason="Reason for the ban.",
         duration="Duration in format <number><unit> (s=seconds, m=minutes, h=hours, d=days)."
     )
-    @app_commands.checks.has_any_role(1530983265467498636, 1516814689110200381)
+    @app_commands.checks.has_any_role(1539463835931377765, 1516814689110200381)
     @app_commands.guilds(*GUILD_ID)
     async def tempban(
-            self,
-            interaction: discord.Interaction,
-            member: discord.Member,
-            duration: str,
-            reason: str = "No reason"):
-        """
-        Temporarily bans a user for a specified duration.
-
-        Args:
-            interaction (discord.Interaction): The interaction that triggered the command.
-            member (discord.Member): The member to ban.
-            duration (str): The duration for which the user is banned (e.g., '1h').
-            reason (str, optional): The reason for the ban.
-        """
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        duration: str,
+        reason: str = "Nessun motivo specificato"
+    ):
         logger.info(f"Temp banning user {member.id} ({member.name}) for {duration} due to {reason}")
-        
+
         try:
             delta = parse_duration(duration)
         except Exception as e:
             logger.error(f"Failed to parse duration '{duration}': {e}")
             embed = EmbedFactory.create_embed(
                 interaction=interaction,
-                description="❌ Invalid duration format.",
-                title="Error!",
+                description="❌ Formato durata non valido. Usa es. `10m`, `2h`, `1d`.",
+                title="Errore!",
                 colour=discord.Color.red(),
                 author="Moderation"
             )
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        unban_time = datetime.utcnow() + delta
-        await member.ban(reason=reason)
+        # 1. Avvisa prima l'utente nei DM
+        await self._send_moderation_dm(
+            member=member,
+            action="bannato temporaneamente",
+            guild_name=interaction.guild.name,
+            reason=reason,
+            duration=duration
+        )
+
+        unban_time = datetime.now(timezone.utc).replace(tzinfo=None) + delta
+
+        # 2. Esegui il ban
+        # await member.ban(reason=reason)
         logger.info(f"Banned user {member.id} ({member.name}) for {duration}. Unban scheduled at {unban_time}")
-        
+
+        # 3. Salva nel DB e programma sban
         await asyncio.to_thread(self.db.tempban, member.id, interaction.guild_id, reason, unban_time)
         await self._update_next_unban_time()
 
         embed = EmbedFactory.create_embed(
             interaction=interaction,
-            description=f"🔨 {member.mention} has been temporarily banned for `{duration}`",
-            title="Banned!",
-            thumbnail=member.avatar.url,
+            description=f"🔨 {member.mention} è stato temporaneamente bannato per `{duration}`",
+            title="Utente Bannato!",
+            thumbnail=member.display_avatar.url,
             colour=discord.Color.red(),
             author="Moderation"
         )
-        embed.add_field(name="📝 Reason", value=reason)
-
+        embed.add_field(name="📝 Motivo", value=reason, inline=False)
         await interaction.response.send_message(embed=embed)
 
     async def _update_next_unban_time(self):
-        """
-        Updates the next unban time from the database and schedules the unban task.
-        """
         next_ban = await asyncio.to_thread(self.db.fetch_next_unban)
 
         if next_ban:
             user_id, guild_id, unban_time = next_ban
-            delay = (unban_time - datetime.utcnow()).total_seconds()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            delay = (unban_time - now).total_seconds()
 
             logger.info(f"Next unban scheduled for user {user_id} in guild {guild_id} at {unban_time}. Delay: {delay}s")
-            
+
             if delay > 0 and (self.next_unban_time is None or unban_time < self.next_unban_time):
                 self.next_unban_time = unban_time
 
-                if self.unban_task:
+                if self.unban_task and not self.unban_task.done():
                     self.unban_task.cancel()
 
                 self.unban_task = self.bot.loop.create_task(self._unban_after_delay(delay))
                 logger.info(f"Unban task scheduled to run after {delay}s")
+            elif delay <= 0:
+                await self._unban_user()
 
     async def _unban_after_delay(self, delay: float):
-        """
-        Unbans a user after a specified delay.
-
-        Args:
-            delay (float): The delay in seconds before the unban.
-        """
         logger.info(f"Sleeping for {delay} seconds before unbanning the user.")
         await asyncio.sleep(delay)
         await self._unban_user()
 
     async def _unban_user(self):
-        """
-        Unbans the user whose temporary ban has expired.
-        """
         next_ban = await asyncio.to_thread(self.db.fetch_next_unban)
 
         if next_ban:
@@ -208,43 +214,37 @@ class Moderation(commands.Cog):
             if guild:
                 try:
                     user = await self.bot.fetch_user(user_id)
-                    await guild.unban(user, reason="Temporary ban expired.")
+                    await guild.unban(user, reason="Ban temporaneo scaduto.")
                     logger.info(f"User {user_id} has been unbanned in guild {guild_id}")
                 except discord.NotFound:
                     logger.warning(f"User with ID {user_id} not found for unban in guild {guild_id}.")
-                    pass
+                except Exception as e:
+                    logger.error(f"Error unbanning user {user_id}: {e}")
 
         await asyncio.to_thread(self.db.delete_expired_bans)
+        self.next_unban_time = None
         await self._update_next_unban_time()
 
     @app_commands.command(name="pardon", description="Pardon a temporarily banned user.")
     @app_commands.describe(user="User to pardon.", reason="Reason for the pardon.")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.guilds(*GUILD_ID)
-    async def pardon(self, interaction: discord.Interaction, user: discord.User, reason: str = ""):
-        """
-        Pardons a user by removing their temporary ban.
-
-        Args:
-            interaction (discord.Interaction): The interaction that triggered the command.
-            user (discord.User): The user to pardon.
-            reason (str, optional): The reason for the pardon.
-        """
+    async def pardon(self, interaction: discord.Interaction, user: discord.User, reason: str = "Pardon"):
         logger.info(f"Pardoning user {user.id} ({user.name}) in guild {interaction.guild.id} for reason: {reason}")
-        
+
         removed = await asyncio.to_thread(self.db.pardon, user.id, interaction.guild.id)
 
         if not removed:
             logger.warning(f"No active tempban found for user {user.id} ({user.name}) in guild {interaction.guild.id}")
             embed = EmbedFactory.create_embed(
                 interaction=interaction,
-                description=f"⚠️ No active tempban found for {user.mention}.",
-                title="Error",
-                thumbnail=user.avatar.url,
+                description=f"⚠️ Nessun ban temporaneo attivo trovato per {user.mention}.",
+                title="Errore",
+                thumbnail=user.display_avatar.url,
                 colour=discord.Color.yellow(),
                 author="Moderation"
             )
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         guild = interaction.guild
@@ -252,84 +252,74 @@ class Moderation(commands.Cog):
             await guild.unban(user, reason=reason)
             logger.info(f"User {user.id} ({user.name}) has been unbanned in guild {guild.id}.")
         except discord.NotFound:
-            logger.warning(f"User {user.id} not found for unban in guild {guild.id}.")
-            pass
+            logger.warning(f"User {user.id} not found on server ban list.")
 
         await self._update_next_unban_time()
 
         embed = EmbedFactory.create_embed(
             interaction=interaction,
-            description=f"☑️ You've pardoned {user.name}",
-            title="Unbanned!",
+            description=f"☑️ Hai revocato il ban a {user.name}",
+            title="Sbannato!",
             thumbnail=user.display_avatar.url,
             colour=discord.Color.green(),
             author="Moderation"
         )
-        embed.add_field(name="Reason", value=reason)
-
+        embed.add_field(name="Motivo", value=reason)
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="kick", description="Kick a user.")
     @app_commands.describe(member="Member to kick.", reason="Reason for the kick.")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.guilds(*GUILD_ID)
-    async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = ""):
-        """
-        Kicks a user from the server.
-
-        Args:
-            interaction (discord.Interaction): The interaction that triggered the command.
-            member (discord.Member): The member to kick.
-            reason (str, optional): The reason for the kick.
-        """
+    async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = "Nessun motivo specificato"):
         logger.info(f"Kicking user {member.id} ({member.name}) from guild {interaction.guild.id} for reason: {reason}")
-        
+
+        # Invia prima il DM di notifica
+        await self._send_moderation_dm(
+            member=member,
+            action="espulso (kicked)",
+            guild_name=interaction.guild.name,
+            reason=reason
+        )
+
         await member.kick(reason=reason)
 
         embed = EmbedFactory.create_embed(
             interaction=interaction,
-            description=f"⛔ You've kicked {member.name}",
-            title="Kicked!",
-            thumbnail=member.avatar.url,
+            description=f"⛔ Hai espulso {member.mention}",
+            title="Espulso!",
+            thumbnail=member.display_avatar.url,
             colour=discord.Color.red(),
             author="Moderation"
         )
-        embed.add_field(name="Reason", value=reason)
-
+        embed.add_field(name="Motivo", value=reason)
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="delete", description="Delete messages.")
-    @app_commands.describe(number="Number of messages to be deleted", member="User")
+    @app_commands.describe(number="Number of messages to delete (max 100)", member="User to filter messages by")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.guilds(*GUILD_ID)
-    async def delete(self, interaction: discord.Interaction, number: int = None, member: discord.Member = None):
-        """
-        Delete n messages from an user.
-        When number is "None", delete all messages
-        When user isn't specified, remove every message no matter who the user is
-        """
-        logger.info(f"Delete {number} messages")
-        
-        messages = [message async for message in interaction.channel.history(limit = number)]
-        
-        n = 0
+    async def delete(self, interaction: discord.Interaction, number: int = 10, member: discord.Member = None):
+        await interaction.response.defer(ephemeral=True)
+        logger.info(f"Purging up to {number} messages from channel {interaction.channel.id}")
 
-        for message in messages:
-            if message.author == member or member == None:
-                await message.delete()
-                n += 1
+        def check_filter(msg):
+            return member is None or msg.author.id == member.id
 
+        deleted = await interaction.channel.purge(limit=number, check=check_filter)
+        count = len(deleted)
+
+        target_text = f" da {member.mention}" if member else ""
         embed = EmbedFactory.create_embed(
             interaction=interaction,
-            description=f"You've deleted {n} message(s) {f"from {member.mention}" if member != None else ""}",
-            title="Deleted messages!",
-            thumbnail= member.avatar.url if member != None else interaction.user.avatar.url,
+            description=f"Eliminati **{count}** messaggi{target_text}.",
+            title="Messaggi Eliminati!",
+            thumbnail=member.display_avatar.url if member else interaction.user.display_avatar.url,
             colour=discord.Colour.red(),
             author="Moderation"
         )
-        
-        await interaction.response.send_message(embed=embed)
 
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot):

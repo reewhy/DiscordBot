@@ -27,15 +27,16 @@ from utils.board_system import BoardSystem
 from views.ticket_view import TicketView, TicketControlView
 
 import discord.ext.tasks
-
-import asyncio
 import datetime as dt
+from datetime import datetime, timezone
 
-# Initilize logger
+# Initialize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
 intents = discord.Intents.all()
 intents.message_content = True
+
+DM_CATEGORY_ID = 1549228463133818930
 
 host = "localhost"
 user = "root"
@@ -99,22 +100,63 @@ with open('configs/blacklist.json') as f:
     for word in d["words"]:
         blacklist.append(word)
 
+
+class CloseDMChannelView(discord.ui.View):
+    """View persistente con pulsante per consentire allo staff di chiudere il canale."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Chiudi Canale",
+        style=discord.ButtonStyle.danger,
+        emoji="🔒",
+        custom_id="persistent_close_dm_channel_btn"
+    )
+    async def close_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        # Notifica opzionale all'utente nei DM che la sessione è conclusa
+        if interaction.channel.topic:
+            user_id_match = re.search(r'ID:\s*(\d+)', interaction.channel.topic)
+            if user_id_match:
+                user_id = int(user_id_match.group(1))
+                try:
+                    user = interaction.client.get_user(user_id) or await interaction.client.fetch_user(user_id)
+                    close_embed = discord.Embed(
+                        title="Ticket Chiuso",
+                        description="Il canale di supporto con lo staff è stato chiuso. Se hai ulteriore bisogno, invia un nuovo messaggio!",
+                        color=discord.Color.red(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    await user.send(embed=close_embed)
+                except Exception:
+                    pass
+
+        embed = discord.Embed(
+            description=f"🔒 Canale in chiusura da parte di {interaction.user.mention}...",
+            color=discord.Color.red()
+        )
+        await interaction.channel.send(embed=embed)
+        await asyncio.sleep(2)
+        await interaction.channel.delete(reason=f"Ticket DM chiuso da {interaction.user.name}")
+
+
 class DiscordBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=config.PREFIX, intents=intents)
 
     async def setup_hook(self):
-        # List here all your cogs, they will be automatically loaded
         for ext in initial_extensions:
             try:
                 await self.load_extension(ext)
                 logger.info(f"Loaded extension: {ext}")
             except Exception as e:
                 logger.error(f"Failed to load extension {ext}", exc_info=e)
-        
+
         try:
             await self.add_cog(LevelCog(self, level_system))
-            logger.info(f"Loaded extension: cogs.level")
+            logger.info("Loaded extension: cogs.level")
             await self.add_cog(Roles(self, roles_system))
             logger.info("Loaded extension: cogs.roles")
             await self.add_cog(Channel(self, server_system, board_system))
@@ -126,7 +168,7 @@ class DiscordBot(commands.Bot):
             await self.add_cog(BirthdayCog(self, bd_system))
             logger.info("Loaded extension: cogs.birthday")
         except Exception as e:
-            logger.error(f"Failed to load extension", exc_info=e)
+            logger.error("Failed to load extension", exc_info=e)
 
         try:
             for g_id in GUILD_ID:
@@ -138,6 +180,7 @@ class DiscordBot(commands.Bot):
         logger.info("Setting up ticket view")
         self.add_view(TicketView())
         self.add_view(TicketControlView())
+        self.add_view(CloseDMChannelView())  # Registra la view per renderla persistente
 
     @tasks.loop(hours=24)
     async def check_birthday(self):
@@ -147,7 +190,6 @@ class DiscordBot(commands.Bot):
         bd_role_id = 1549205110826082355
 
         try:
-            # Fetch all users who have a birthday today
             rows = bd_system.get_birthdays(today)
             if not rows:
                 logger.info("No birthdays found for today.")
@@ -155,8 +197,6 @@ class DiscordBot(commands.Bot):
 
             for guild in self.guilds:
                 guild_id = guild.id
-
-                # 1. Fetch birthday channel from server_system
                 channel_id = server_system.get_birthday_channel(guild_id)
                 if not channel_id:
                     continue
@@ -165,15 +205,13 @@ class DiscordBot(commands.Bot):
                 if not birthday_channel:
                     continue
 
-                # 2. Congratulate each birthday person in this guild
                 for row in rows:
                     user_id = row[0]
                     try:
                         member = guild.get_member(user_id) or await guild.fetch_member(user_id)
                         if not member:
-                            continue  # User is not in this specific guild
+                            continue
 
-                        # Create cute embed for the user
                         embed = EmbedFactory.create_embed(
                             title="🎂 Buon Compleanno! 🎉",
                             description=(
@@ -181,7 +219,7 @@ class DiscordBot(commands.Bot):
                                 " Ti auguriamo una giornata fantastica piena di gioia e"
                                 " di tante cose belle! 💖"
                             ),
-                            colour=discord.Color.from_rgb(255, 182, 193),  # Light pink/festive
+                            colour=discord.Color.from_rgb(255, 182, 193),
                             author="Birthday System",
                             thumbnail=(
                                 member.avatar.url
@@ -203,32 +241,21 @@ class DiscordBot(commands.Bot):
             logger.error("Error occurred during check_birthday loop execution", exc_info=e)
 
     async def on_ready(self):
-        logger.info(f"We have logged in as {bot.user.name} (ID: {bot.user.id}")
-        logger.info(f"Connected to {len(bot.guilds)} guild(s)")
+        logger.info(f"We have logged in as {self.user.name} (ID: {self.user.id})")
+        logger.info(f"Connected to {len(self.guilds)} guild(s)")
 
         try:
-            # Setup here your custom presence on ready
-            await bot.change_presence(
-                status = discord.Status.online,
-                activity=discord.Game(name="made by semita <3")
+            # Presenza aggiornata per informare gli utenti della funzione DM/Supporto
+            await self.change_presence(
+                status=discord.Status.online,
+                activity=discord.Activity(
+                    type=discord.ActivityType.listening,
+                    name="Scrivimi in DM per parlare con lo staff!"
+                )
             )
             logger.info("Presence updated successfully")
 
-
-            # self.announce_channel = self.get_channel(1528433049828589731)
-            # self.level_channel = self.get_channel(1528433049828589733)
-
             self.meme = self.get_channel(1516814162846810234)
-
-
-            embed = EmbedFactory.create_embed(
-                title="Ready!",
-                description="🟩 The bot is ready to use!",
-                colour=discord.Color.green(),
-                author=False
-            )
-            # await self.announce_channel.send(embed=embed)
-            # await self.meme.send(content='')
             self.check_birthday.start()
         except Exception as e:
             logger.error("Failed to update presence", exc_info=e)
@@ -236,58 +263,148 @@ class DiscordBot(commands.Bot):
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
-        
-        res = any(elem in message.content for elem in blacklist)
-        if res:
+
+        # =========================================================================
+        # 1. GESTIONE DM: Da Utente Privato -> Canale Staff
+        # =========================================================================
+        if isinstance(message.channel, discord.DMChannel):
+            logger.info(f"Received DM from {message.author.name} (ID: {message.author.id})")
+
+            category = None
+            guild = None
+            for g_id in GUILD_ID:
+                target_guild = self.get_guild(g_id)
+                if target_guild:
+                    category = discord.utils.get(target_guild.categories, id=DM_CATEGORY_ID)
+                    if category:
+                        guild = target_guild
+                        break
+
+            if not category or not guild:
+                logger.error(f"Categoria DM con ID {DM_CATEGORY_ID} non trovata.")
+                return
+
+            # Cerca se esiste già un canale aperto per questo utente
+            target_channel = None
+            for ch in category.text_channels:
+                if ch.topic and str(message.author.id) in ch.topic:
+                    target_channel = ch
+                    break
+
+            # Se non esiste, crea il canale e invia sia l'header allo staff sia l'embed di conferma all'utente
+            if not target_channel:
+                clean_name = re.sub(r'[^a-zA-Z0-9_-]', '', message.author.name.lower().replace(" ", "-"))
+                channel_name = f"dm-{clean_name}"[:100]
+
+                target_channel = await guild.create_text_channel(
+                    name=channel_name,
+                    category=category,
+                    topic=f"Canale di supporto DM per: {message.author.name} (ID: {message.author.id})"
+                )
+                logger.info(f"Created DM channel {target_channel.name} ({target_channel.id}) for {message.author.name}")
+
+                # 1. Embed intestazione nel canale staff
+                header_embed = discord.Embed(
+                    title="Nuova Conversazione DM",
+                    description=(
+                        f"Questo canale è stato aperto automaticamente per comunicare con {message.author.mention}.\n"
+                        f"• Tutti i messaggi inviati qui dallo staff saranno recapitati in DM all'utente.\n"
+                        f"• Quando la conversazione è conclusa, clicca sul pulsante sottostante per eliminare il canale."
+                    ),
+                    color=discord.Color.gold(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                header_embed.set_author(name=f"{message.author.name} ({message.author.id})",
+                                        icon_url=message.author.display_avatar.url)
+                header_embed.set_footer(text="Staff Support Panel")
+
+                await target_channel.send(embed=header_embed, view=CloseDMChannelView(), content="@everyone")
+
+                # 2. Embed inviato in risposta all'utente nei DM (solo al primo messaggio)
+                ack_embed = discord.Embed(
+                    title="Richiesta Ricevuta! 📬",
+                    description=(
+                        "Ciao! Abbiamo recapitato il tuo messaggio al nostro team di moderazione.\n\n"
+                        "Uno staffer prenderà in carico la tua richiesta e **ti risponderà direttamente qui a breve**."
+                    ),
+                    color=discord.Color.green(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                if guild.icon:
+                    ack_embed.set_thumbnail(url=guild.icon.url)
+                ack_embed.set_footer(text=guild.name, icon_url=guild.icon.url if guild.icon else None)
+
+                try:
+                    await message.author.send(embed=ack_embed)
+                except discord.Forbidden:
+                    logger.warning(f"Could not send DM confirmation to {message.author.id}")
+
+            # Inoltro del messaggio dell'utente nel canale dello staff
+            embed = discord.Embed(
+                description=message.content if message.content else "*Nessun contenuto testuale*",
+                colour=discord.Color.blue(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.set_author(
+                name=f"{message.author.display_name} (DM Utente)",
+                icon_url=message.author.display_avatar.url
+            )
+            embed.set_footer(text=f"User ID: {message.author.id}")
+
+            if message.attachments:
+                embed.set_image(url=message.attachments[0].url)
+
+            await target_channel.send(embed=embed)
+            await message.add_reaction("📨")
+            return
+
+        # =========================================================================
+        # 2. GESTIONE RISPOSTA STAFF: Da Canale Staff -> DM Utente
+        # =========================================================================
+        if message.channel.category_id == DM_CATEGORY_ID and message.channel.topic:
+            user_id_match = re.search(r'ID:\s*(\d+)', message.channel.topic)
+            if user_id_match:
+                recipient_id = int(user_id_match.group(1))
+                try:
+                    recipient = await self.fetch_user(recipient_id)
+
+                    staff_embed = discord.Embed(
+                        description=message.content if message.content else "*Nessun testo*",
+                        colour=discord.Color.green(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    staff_embed.set_author(
+                        name=f"{message.author.display_name} (Staff)",
+                        icon_url=message.author.display_avatar.url
+                    )
+
+                    if message.attachments:
+                        staff_embed.set_image(url=message.attachments[0].url)
+
+                    await recipient.send(embed=staff_embed)
+                    await message.add_reaction("✅")
+                    logger.info(f"Staff member {message.author.name} replied to user {recipient.id}")
+                except discord.Forbidden:
+                    await message.channel.send(
+                        "⚠️ Impossibile recapitare il messaggio: l'utente ha i DM disabilitati o ha bloccato il bot.")
+                except Exception as e:
+                    logger.error(f"Errore nell'inoltro della risposta staff via DM: {e}")
+                return
+
+        # =========================================================================
+        # 3. FILTRO BLACKLIST
+        # =========================================================================
+        if any(elem in message.content for elem in blacklist):
             await message.delete()
             return
 
-        # _, level = level_system.add_xp(message.author.id, message.guild.id, amount=10)
-        # xp, user_level = level_system.get_user(message.author.id, message.guild.id)
-
-        #try:
-        #    roles = server_system.get_all_roles(message.guild.id, user_level)
-        #    logger.info(roles)
-        #    to_add = []
-        #    if len(roles) > 0:
-        #        for role_id in roles:
-        #            role = await message.guild.fetch_role(role_id[0])
-        #            to_add.append(role)
-        #        logger.info(to_add)
-        #        await message.author.add_roles(*to_add)
-        #except Exception as e:
-        #    logger.error("Error in role level:", exc_info=e)
-
-        #if xp == 0:
-            # embed = EmbedFactory.create_embed(
-            #     title="Level up!",
-            #     description=f"🎉 {message.author.mention} just leveled up!",
-            #     colour=discord.Color.yellow(),
-            #     author="Level",
-            #     thumbnail=message.author.avatar.url
-            # )
-            #
-            # embed.add_field(name="New level", value=user_level, inline=True)
-            #
-            # guild_id = message.guild.id
-            #
-            # channel_id = server_system.get_level_channel(guild_id)[0]
-            #
-            # logger.info(f"Found channel: {channel_id}")
-            #
-            # level_channel = self.get_channel(channel_id)
-            #
-            # if level_channel:
-            #     await level_channel.send(embed=embed)
-            # else:
-            #     await self.announce_channel.send(content="Channel not found")
+        await self.process_commands(message)
 
     async def on_member_join(self, member: discord.Member):
         logger.info(f"New member joined: {member.name}")
 
         guild_id = member.guild.id
         description = server_system.get_description(guild_id)
-        #non dimenticarti di leggere le ⁠📕regole e prendere dei ⁠📖ruoli ! :heart:
 
         try:
             role_id_data = server_system.get_role(guild_id)
@@ -304,31 +421,19 @@ class DiscordBot(commands.Bot):
             description=description.replace("%u", f"{member.mention}")
         )
 
-        print("canali: ")
         channels = server_system.get_channels(guild_id)
-        print(channels)
-
         if channels:
             for item in channels:
-                # Check if the item is actually a tuple/list with 2 elements before unpacking
                 if isinstance(item, (tuple, list)) and len(item) == 2:
                     channel_id, desc = item
                     channel = self.get_channel(channel_id)
-                    #if channel:
-                    #    embed.add_field(name=desc, value=channel.mention, inline=False)
                 else:
                     logger.warning(f"Unexpected data format in channels list: {item}")
 
-        # FIX AVATAR: Se l'utente non ha un avatar personalizzato, usa quello di default di Discord
         avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
         embed.set_thumbnail(url=avatar_url)
 
-        #embed.set_image(
-        #    url="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmF2MTc2YjBxamZ3aXdvMnF6cGdrc2s1dDR1YnR3aGVqb2c2Yjd3bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ExMGjbktr4phe/giphy.gif")
-
-        # FIX ANNOUNCE: Rimuoviamo il [0] superfluo perché il metodo restituisce già l'ID pulito
         channel_id = server_system.get_announce_channel(guild_id)
-
         if channel_id:
             channel = self.get_channel(channel_id)
             if channel:
@@ -338,32 +443,8 @@ class DiscordBot(commands.Bot):
         else:
             logger.warning(f"Nessun canale announce configurato per la gilda {guild_id}")
 
-    
     async def on_member_leave(self, member: discord.Member):
         logger.info(f"Member left: {member.name}")
-        #
-        # guild_id = member.guild.id
-        #
-        # embed = discord.Embed(
-        #     colour=discord.Color.brand_red(),
-        #     title=f"{member.name} ci ha abandonati 😢",
-        #     description=f"Prima o poi si pentirà della sua scelta."
-        # )
-        #
-        # embed.set_thumbnail(url=member.avatar.url)
-        #
-        # embed.set_image(url="https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExZnd3aDJwYzdoZWhkbGV6b2Joc3c3MjJvZzUwMG8zMjljOGo5eXN1aSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/nyDuytA5bRdbW/giphy.gif")
-        #
-        # channel_id = server_system.get_announce_channel(guild_id)
-        #
-        # if channel_id:
-        #     channel = self.get_channel(channel_id)
-        #     if channel:
-        #         await channel.send(embed=embed, content=f"")
-        #     else:
-        #         logger.error(f"Announce channel con ID {channel_id} non trovato in cache.")
-        # else:
-        #     logger.warning(f"Nessun canale announce configurato per la gilda {guild_id}")
 
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         logger.info("--- Reaction Add Event Triggered ---")
@@ -372,23 +453,18 @@ class DiscordBot(commands.Bot):
             logger.info("Ignored: Reaction is from a bot.")
             return
 
-        # Use emoji.id for custom emojis, or emoji.name for standard Unicode emojis
         emoji_identifier = payload.emoji.id or payload.emoji.name
         logger.info(f"Reaction added: {emoji_identifier} on message ID: {payload.message_id}")
 
-        # Standard Unicode star emoji target
         target_emoji = '⭐'
 
-        # Standard Unicode emojis have payload.emoji.id as None, so check payload.emoji.name
         if payload.emoji.name == target_emoji:
-            # 1. Update and check reaction count
             board_system.add_reaction(payload.message_id)
             n_reactions = board_system.get_reactions(payload.message_id)[0]
 
             min_react = board_system.get_min_reactions(payload.guild_id)
             logger.info(f"Current reactions: {n_reactions} / Target: {min_react}")
 
-            # 2. Check if we hit the exact threshold for boarding
             if n_reactions == min_react:
                 logger.info("Threshold reached! Fetching original message...")
 
@@ -407,7 +483,6 @@ class DiscordBot(commands.Bot):
                     logger.error("Bot lacks 'Read Message History' permissions in the source channel.")
                     return
 
-                # 3. Build Embed
                 description = f"{message.content}\n\n**[Jump to message!]({message.jump_url})**"
                 embed = EmbedFactory.create_embed(
                     description=description,
@@ -418,7 +493,6 @@ class DiscordBot(commands.Bot):
                 avatar_url = message.author.avatar.url if message.author.avatar else message.author.default_avatar.url
                 embed.set_author(name=message.author.display_name, icon_url=avatar_url)
 
-                # Extract first image attachment if it exists
                 if message.attachments:
                     for attachment in message.attachments:
                         if any(attachment.filename.lower().endswith(ext) for ext in
@@ -427,7 +501,6 @@ class DiscordBot(commands.Bot):
                             logger.info("Image attachment found and added to embed.")
                             break
 
-                # 4. Fetch Board Channel from BoardSystem
                 channel_id = board_system.get_board_channel(payload.guild_id)
                 logger.info(f"Board Channel ID found: {channel_id}")
 
@@ -446,7 +519,6 @@ class DiscordBot(commands.Bot):
                 else:
                     logger.warning("No board channel set for this guild. Use /setboard to set it.")
 
-            # 5. NEW: Check if we hit the "extra 2" threshold to change the bot's PFP
             elif n_reactions == min_react + 2:
                 logger.info("Threshold + 2 reached! Checking for image to set as bot pfp...")
 
@@ -461,25 +533,17 @@ class DiscordBot(commands.Bot):
 
                 if message.attachments:
                     for attachment in message.attachments:
-                        # Note: 'webp' is excluded here because standard Discord avatars usually require PNG/JPG/GIF formats.
                         if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'gif']):
                             try:
-                                # Read the image file as bytes
                                 image_bytes = await attachment.read()
-
-                                # Edit the bot's user profile with the new bytes
                                 await self.user.edit(avatar=image_bytes)
                                 logger.info(f"Successfully updated bot profile picture to {attachment.filename}!")
-
-                                # Break out of the loop so we only process the first valid image
                                 break
                             except discord.HTTPException as e:
-                                # Discord heavily rate-limits avatar changes (usually a few times an hour).
                                 logger.error(f"Failed to update avatar (may be rate-limited): {e}")
             else:
                 logger.info("Threshold not met (or already surpassed), skipping embed creation.")
 
-        # --- Role Logic ---
         role_data = roles_system.get_role(payload.message_id, emoji_identifier)
         if role_data:
             role_id = role_data[0] if isinstance(role_data, tuple) else role_data
@@ -499,7 +563,6 @@ class DiscordBot(commands.Bot):
             return
 
         emoji_identifier = payload.emoji.id or payload.emoji.name
-
         guild: discord.Guild = self.get_guild(payload.guild_id) or await self.fetch_guild(payload.guild_id)
 
         try:
@@ -510,28 +573,22 @@ class DiscordBot(commands.Bot):
 
         logger.info(f"Received reaction: {emoji_identifier} by {member.name}")
 
-        # Standard Unicode star emoji target
         target_emoji = '⭐'
 
         if payload.emoji.name == target_emoji:
-            # 1. Recupera l'ID del messaggio della board PRIMA di rimuovere la riga dal DB
             board_message_id = board_system.get_boarded(payload.message_id)
             if isinstance(board_message_id, tuple):
                 board_message_id = board_message_id[0]
 
-            # 2. Rimuovi la reazione dal database
             board_system.remove_reaction(payload.message_id)
 
-            # 3. Controlla le reazioni rimaste
             reactions = board_system.get_reactions(payload.message_id)
             min_react = board_system.get_min_reactions(payload.guild_id)
 
-            # 4. Calcola il numero effettivo di reazioni
             current_reactions = 0
             if reactions is not None:
                 current_reactions = reactions[0] if isinstance(reactions, tuple) else reactions
 
-            # Se le reazioni scendono sotto il minimo, elimina il messaggio dalla board
             if current_reactions < min_react:
                 if board_message_id:
                     channel_id = board_system.get_board_channel(payload.guild_id)
@@ -550,7 +607,6 @@ class DiscordBot(commands.Bot):
                         except discord.Forbidden:
                             logger.error("Bot lacks permissions in the board channel.")
 
-        # --- Role Logic ---
         role_data = roles_system.get_role(payload.message_id, emoji_identifier)
         if not role_data:
             logger.warning(f"No role mapping found for message ID {payload.message_id} and emoji {emoji_identifier}")
@@ -568,7 +624,6 @@ class DiscordBot(commands.Bot):
 
 
 bot = DiscordBot()
-channel = None
 
 
 async def main():
@@ -581,16 +636,7 @@ async def main():
     except Exception as e:
         logger.critical("Bot crashed!", exc_info=e)
     finally:
-        embed = EmbedFactory.create_embed(
-            title="Stopped.",
-            description="🟥 The bot has been stopped!",
-            colour=discord.Color.red(),
-            author=False
-        )
-
-        await bot.announce_channel.send(embed=embed)
         logger.info("Bot has shut down!")
-
 
 
 if __name__ == "__main__":
