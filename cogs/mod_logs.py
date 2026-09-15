@@ -9,6 +9,8 @@ class ModLogs(commands.Cog):
     def __init__(self, bot: commands.Bot, server_system: ServerSystem):
         self.bot = bot
         self.server_system = server_system
+        # Traccia l'ultimo ID e contatore visto per evitare falsi negativi/positivi
+        self._last_voice_move_counts = {}  # {entry_id: count}
 
     def _get_log_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
         """Recupera il canale log configurato nel database."""
@@ -682,14 +684,20 @@ class ModLogs(commands.Cog):
         await log_channel.send(embed=embed)
 
     # =========================================================================
-    # 4. VOICE EVENTS (Join, Leave, Server Mute/Deafen)
+    # 4. VOICE EVENTS (Join, Leave, Move, Server Mute/Deafen)
     # =========================================================================
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState,
                                     after: discord.VoiceState):
-        """Gestisce Join, Leave e azioni di moderazione vocale (Server Mute/Deafen)."""
+        """Gestisce Join, Leave, Move e azioni di moderazione vocale (Server Mute/Deafen/Kick/Move)."""
         if member.bot:
+            return
+
+        # Ignora cambi interni (es. self-mute, self-deaf, condivisione schermo)
+        if (before.channel == after.channel and
+                before.mute == after.mute and
+                before.deaf == after.deaf):
             return
 
         log_channel = self._get_log_channel(member.guild)
@@ -700,20 +708,18 @@ class ModLogs(commands.Cog):
         embed.set_author(name=f"{member} ({member.id})", icon_url=member.display_avatar.url)
 
         # ---------------------------------------------------------------------
-        # A. MODERAZIONE: Server Mute (Silenzia nel server)
+        # A. MODERAZIONE: Server Mute
         # ---------------------------------------------------------------------
         if before.mute != after.mute:
-            # Ricerca specifica dell'entry di member_update negli audit log
             staff = "*Sconosciuto / Non presente negli audit*"
             reason = "*Nessun motivo specificato*"
 
             if member.guild.me.guild_permissions.view_audit_log:
-                await asyncio.sleep(1.5)  # Discord impiega un momento a scrivere l'audit log
+                await asyncio.sleep(1.2)
                 try:
                     async for entry in member.guild.audit_logs(limit=10,
                                                                action=discord.AuditLogAction.member_update):
                         if entry.target and entry.target.id == member.id:
-                            # Controlla se questa voce riguarda specificamente il cambio di 'mute'
                             if hasattr(entry.after, "mute") or hasattr(entry.before, "mute"):
                                 time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
                                 if time_diff < 15:
@@ -742,14 +748,14 @@ class ModLogs(commands.Cog):
             return
 
         # ---------------------------------------------------------------------
-        # B. MODERAZIONE: Server Deafen (Insonorizza nel server)
+        # B. MODERAZIONE: Server Deafen
         # ---------------------------------------------------------------------
         if before.deaf != after.deaf:
             staff = "*Sconosciuto / Non presente negli audit*"
             reason = "*Nessun motivo specificato*"
 
             if member.guild.me.guild_permissions.view_audit_log:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1.2)
                 try:
                     async for entry in member.guild.audit_logs(limit=10,
                                                                action=discord.AuditLogAction.member_update):
@@ -793,17 +799,92 @@ class ModLogs(commands.Cog):
             return
 
         # ---------------------------------------------------------------------
-        # D. USCITA CANALE VOCALE (o Disconnessione Forzata)
+        # D. USCITA / KICK VOCALE DA STAFF
         # ---------------------------------------------------------------------
         if before.channel is not None and after.channel is None:
-            embed.title = "🔇 Uscita Canale Vocale"
-            embed.description = f"{member.mention} ha lasciato il canale vocale `{before.channel.name}`."
-            embed.color = discord.Color.red()
-            embed.add_field(name="Canale", value=f"`{before.channel.name}` (ID: {before.channel.id})", inline=False)
+            # Ricerca audit log per disconnessione forzata (member_disconnect non ha entry.target)
+            staff = None
+            if member.guild.me.guild_permissions.view_audit_log:
+                await asyncio.sleep(1.2)
+                try:
+                    async for entry in member.guild.audit_logs(limit=5,
+                                                               action=discord.AuditLogAction.member_disconnect):
+                        time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
+                        if time_diff < 10:
+                            staff = entry.user
+                            break
+                except discord.HTTPException:
+                    pass
 
-            entry = await self._find_audit_entry(member.guild, discord.AuditLogAction.member_disconnect, member.id)
-            if entry and entry.user:
-                embed.add_field(name="Disconnesso da", value=entry.user.mention, inline=True)
+            if staff:
+                embed.title = "👢 Disconnessione Vocale Forzata (Voice Kick)"
+                embed.description = f"{member.mention} è stato disconnesso dalla chat vocale da uno staffer."
+                embed.color = discord.Color.red()
+                embed.add_field(name="Canale", value=f"`{before.channel.name}`", inline=True)
+                embed.add_field(name="Eseguito da", value=staff.mention, inline=True)
+            else:
+                embed.title = "🔇 Uscita Canale Vocale"
+                embed.description = f"{member.mention} ha lasciato il canale vocale `{before.channel.name}`."
+                embed.color = discord.Color.light_grey()
+                embed.add_field(name="Canale", value=f"`{before.channel.name}` (ID: {before.channel.id})",
+                                inline=False)
+
+            await log_channel.send(embed=embed)
+            return
+
+        # ---------------------------------------------------------------------
+        # E. SPOSTAMENTO / MOVE DA STAFF
+        # ---------------------------------------------------------------------
+        if before.channel is not None and after.channel is not None and before.channel != after.channel:
+            staff = None
+
+            if member.guild.me.guild_permissions.view_audit_log:
+                # Breve attesa per consentire a Discord di aggiornare il contatore
+                await asyncio.sleep(1.0)
+                try:
+                    async for entry in member.guild.audit_logs(limit=5, action=discord.AuditLogAction.member_move):
+                        # L'entry di Discord contiene il canale di destinazione in entry.extra.channel
+                        target_channel_id = getattr(getattr(entry, "extra", None), "channel", None)
+                        if target_channel_id and hasattr(target_channel_id, "id"):
+                            target_channel_id = target_channel_id.id
+
+                        # Recupera il contatore corrente dell'azione
+                        count = getattr(getattr(entry, "extra", None), "count", 0)
+                        last_count = self._last_voice_move_counts.get(entry.id, None)
+
+                        # Verifica oraria: controlla se l'evento è recente (ultimi 15 sec)
+                        time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
+
+                        # È uno spostamento da staff se:
+                        # 1. Il contatore è aumentato rispetto a prima OPPURE
+                        # 2. È una nuova voce creata negli ultimi 15 secondi verso quel canale
+                        is_new_move = (last_count is not None and count > last_count) or (
+                                    last_count is None and time_diff < 15)
+
+                        if is_new_move and (target_channel_id == after.channel.id or target_channel_id is None):
+                            self._last_voice_move_counts[entry.id] = count
+                            staff = entry.user
+                            break
+
+                        # Aggiorna comunque lo stato per tracciare
+                        self._last_voice_move_counts[entry.id] = count
+
+                except discord.HTTPException:
+                    pass
+
+            if staff:
+                embed.title = "🔄 Spostamento Vocale Forzato (Voice Move)"
+                embed.description = f"{member.mention} è stato spostato in un altro canale dallo staff."
+                embed.color = discord.Color.purple()
+                embed.add_field(name="Da", value=before.channel.mention, inline=True)
+                embed.add_field(name="A", value=after.channel.mention, inline=True)
+                embed.add_field(name="Spostato da", value=staff.mention, inline=False)
+            else:
+                embed.title = "🔄 Cambio Canale Vocale"
+                embed.description = f"{member.mention} si è spostato autonomamente."
+                embed.color = discord.Color.blue()
+                embed.add_field(name="Da", value=before.channel.mention, inline=True)
+                embed.add_field(name="A", value=after.channel.mention, inline=True)
 
             await log_channel.send(embed=embed)
             return

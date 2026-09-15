@@ -30,6 +30,7 @@ class Channel(commands.Cog):
     @app_commands.command(name="onjoin", description="Set a role on join.")
     @app_commands.guilds(*GUILD_ID)
     @app_commands.describe(role="Role to add on join")
+    @app_commands.checks.has_permissions(administrator=True)
     async def role(self, interaction: discord.Interaction, role: discord.Role):
         try:
             self.server_system.set_role(interaction.guild_id, role.id)
