@@ -681,132 +681,132 @@ class ModLogs(commands.Cog):
         embed.add_field(name="Moderatore", value=staff, inline=True)
         await log_channel.send(embed=embed)
 
-        # =========================================================================
-        # 4. VOICE EVENTS (Join, Leave, Server Mute/Deafen)
-        # =========================================================================
+    # =========================================================================
+    # 4. VOICE EVENTS (Join, Leave, Server Mute/Deafen)
+    # =========================================================================
 
-        @commands.Cog.listener()
-        async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState,
-                                        after: discord.VoiceState):
-            """Gestisce Join, Leave e azioni di moderazione vocale (Server Mute/Deafen)."""
-            if member.bot:
-                return
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState,
+                                    after: discord.VoiceState):
+        """Gestisce Join, Leave e azioni di moderazione vocale (Server Mute/Deafen)."""
+        if member.bot:
+            return
 
-            log_channel = self._get_log_channel(member.guild)
-            if not log_channel:
-                return
+        log_channel = self._get_log_channel(member.guild)
+        if not log_channel:
+            return
 
-            embed = discord.Embed(timestamp=datetime.now(timezone.utc))
-            embed.set_author(name=f"{member} ({member.id})", icon_url=member.display_avatar.url)
+        embed = discord.Embed(timestamp=datetime.now(timezone.utc))
+        embed.set_author(name=f"{member} ({member.id})", icon_url=member.display_avatar.url)
 
-            # ---------------------------------------------------------------------
-            # A. MODERAZIONE: Server Mute (Silenzia nel server)
-            # ---------------------------------------------------------------------
-            if before.mute != after.mute:
-                # Ricerca specifica dell'entry di member_update negli audit log
-                staff = "*Sconosciuto / Non presente negli audit*"
-                reason = "*Nessun motivo specificato*"
+        # ---------------------------------------------------------------------
+        # A. MODERAZIONE: Server Mute (Silenzia nel server)
+        # ---------------------------------------------------------------------
+        if before.mute != after.mute:
+            # Ricerca specifica dell'entry di member_update negli audit log
+            staff = "*Sconosciuto / Non presente negli audit*"
+            reason = "*Nessun motivo specificato*"
 
-                if member.guild.me.guild_permissions.view_audit_log:
-                    await asyncio.sleep(1.5)  # Discord impiega un momento a scrivere l'audit log
-                    try:
-                        async for entry in member.guild.audit_logs(limit=10,
-                                                                   action=discord.AuditLogAction.member_update):
-                            if entry.target and entry.target.id == member.id:
-                                # Controlla se questa voce riguarda specificamente il cambio di 'mute'
-                                if hasattr(entry.after, "mute") or hasattr(entry.before, "mute"):
-                                    time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
-                                    if time_diff < 15:
-                                        staff = entry.user.mention if entry.user else staff
-                                        reason = entry.reason or reason
-                                        break
-                    except discord.HTTPException:
-                        pass
+            if member.guild.me.guild_permissions.view_audit_log:
+                await asyncio.sleep(1.5)  # Discord impiega un momento a scrivere l'audit log
+                try:
+                    async for entry in member.guild.audit_logs(limit=10,
+                                                               action=discord.AuditLogAction.member_update):
+                        if entry.target and entry.target.id == member.id:
+                            # Controlla se questa voce riguarda specificamente il cambio di 'mute'
+                            if hasattr(entry.after, "mute") or hasattr(entry.before, "mute"):
+                                time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
+                                if time_diff < 15:
+                                    staff = entry.user.mention if entry.user else staff
+                                    reason = entry.reason or reason
+                                    break
+                except discord.HTTPException:
+                    pass
 
-                channel_str = after.channel.mention if after.channel else (
-                    before.channel.mention if before.channel else "`Nessun canale`")
+            channel_str = after.channel.mention if after.channel else (
+                before.channel.mention if before.channel else "`Nessun canale`")
 
-                if after.mute:
-                    embed.title = "🎙️ Membro Silenziato nel Server (Server Mute)"
-                    embed.description = f"{member.mention} è stato silenziato da uno staffer."
-                    embed.color = discord.Color.dark_orange()
-                else:
-                    embed.title = "🎙️ Membro Riattivato nel Server (Server Unmute)"
-                    embed.description = f"Il muto server a {member.mention} è stato rimosso."
-                    embed.color = discord.Color.green()
-
-                embed.add_field(name="Canale", value=channel_str, inline=True)
-                embed.add_field(name="Moderatore", value=staff, inline=True)
-                embed.add_field(name="Motivo", value=reason, inline=False)
-                await log_channel.send(embed=embed)
-                return
-
-            # ---------------------------------------------------------------------
-            # B. MODERAZIONE: Server Deafen (Insonorizza nel server)
-            # ---------------------------------------------------------------------
-            if before.deaf != after.deaf:
-                staff = "*Sconosciuto / Non presente negli audit*"
-                reason = "*Nessun motivo specificato*"
-
-                if member.guild.me.guild_permissions.view_audit_log:
-                    await asyncio.sleep(1.5)
-                    try:
-                        async for entry in member.guild.audit_logs(limit=10,
-                                                                   action=discord.AuditLogAction.member_update):
-                            if entry.target and entry.target.id == member.id:
-                                if hasattr(entry.after, "deaf") or hasattr(entry.before, "deaf"):
-                                    time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
-                                    if time_diff < 15:
-                                        staff = entry.user.mention if entry.user else staff
-                                        reason = entry.reason or reason
-                                        break
-                    except discord.HTTPException:
-                        pass
-
-                channel_str = after.channel.mention if after.channel else (
-                    before.channel.mention if before.channel else "`Nessun canale`")
-
-                if after.deaf:
-                    embed.title = "🎧 Membro Insonorizzato nel Server (Server Deafen)"
-                    embed.description = f"{member.mention} è stato insonorizzato dallo staff."
-                    embed.color = discord.Color.dark_red()
-                else:
-                    embed.title = "🎧 Membro Dis-insonorizzato (Server Undeafen)"
-                    embed.description = f"L'insonorizzazione server a {member.mention} è stata revocata."
-                    embed.color = discord.Color.green()
-
-                embed.add_field(name="Canale", value=channel_str, inline=True)
-                embed.add_field(name="Moderatore", value=staff, inline=True)
-                embed.add_field(name="Motivo", value=reason, inline=False)
-                await log_channel.send(embed=embed)
-                return
-
-            # ---------------------------------------------------------------------
-            # C. INGRESSO CANALE VOCALE
-            # ---------------------------------------------------------------------
-            if before.channel is None and after.channel is not None:
-                embed.title = "🔊 Ingresso Canale Vocale"
-                embed.description = f"{member.mention} è entrato nel canale vocale {after.channel.mention}."
+            if after.mute:
+                embed.title = "🎙️ Membro Silenziato nel Server (Server Mute)"
+                embed.description = f"{member.mention} è stato silenziato da uno staffer."
+                embed.color = discord.Color.dark_orange()
+            else:
+                embed.title = "🎙️ Membro Riattivato nel Server (Server Unmute)"
+                embed.description = f"Il muto server a {member.mention} è stato rimosso."
                 embed.color = discord.Color.green()
-                embed.add_field(name="Canale", value=f"`{after.channel.name}` (ID: {after.channel.id})", inline=False)
-                await log_channel.send(embed=embed)
-                return
 
-            # ---------------------------------------------------------------------
-            # D. USCITA CANALE VOCALE (o Disconnessione Forzata)
-            # ---------------------------------------------------------------------
-            if before.channel is not None and after.channel is None:
-                embed.title = "🔇 Uscita Canale Vocale"
-                embed.description = f"{member.mention} ha lasciato il canale vocale `{before.channel.name}`."
-                embed.color = discord.Color.red()
-                embed.add_field(name="Canale", value=f"`{before.channel.name}` (ID: {before.channel.id})", inline=False)
+            embed.add_field(name="Canale", value=channel_str, inline=True)
+            embed.add_field(name="Moderatore", value=staff, inline=True)
+            embed.add_field(name="Motivo", value=reason, inline=False)
+            await log_channel.send(embed=embed)
+            return
 
-                entry = await self._find_audit_entry(member.guild, discord.AuditLogAction.member_disconnect, member.id)
-                if entry and entry.user:
-                    embed.add_field(name="Disconnesso da", value=entry.user.mention, inline=True)
+        # ---------------------------------------------------------------------
+        # B. MODERAZIONE: Server Deafen (Insonorizza nel server)
+        # ---------------------------------------------------------------------
+        if before.deaf != after.deaf:
+            staff = "*Sconosciuto / Non presente negli audit*"
+            reason = "*Nessun motivo specificato*"
 
-                await log_channel.send(embed=embed)
-                return
+            if member.guild.me.guild_permissions.view_audit_log:
+                await asyncio.sleep(1.5)
+                try:
+                    async for entry in member.guild.audit_logs(limit=10,
+                                                               action=discord.AuditLogAction.member_update):
+                        if entry.target and entry.target.id == member.id:
+                            if hasattr(entry.after, "deaf") or hasattr(entry.before, "deaf"):
+                                time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
+                                if time_diff < 15:
+                                    staff = entry.user.mention if entry.user else staff
+                                    reason = entry.reason or reason
+                                    break
+                except discord.HTTPException:
+                    pass
+
+            channel_str = after.channel.mention if after.channel else (
+                before.channel.mention if before.channel else "`Nessun canale`")
+
+            if after.deaf:
+                embed.title = "🎧 Membro Insonorizzato nel Server (Server Deafen)"
+                embed.description = f"{member.mention} è stato insonorizzato dallo staff."
+                embed.color = discord.Color.dark_red()
+            else:
+                embed.title = "🎧 Membro Dis-insonorizzato (Server Undeafen)"
+                embed.description = f"L'insonorizzazione server a {member.mention} è stata revocata."
+                embed.color = discord.Color.green()
+
+            embed.add_field(name="Canale", value=channel_str, inline=True)
+            embed.add_field(name="Moderatore", value=staff, inline=True)
+            embed.add_field(name="Motivo", value=reason, inline=False)
+            await log_channel.send(embed=embed)
+            return
+
+        # ---------------------------------------------------------------------
+        # C. INGRESSO CANALE VOCALE
+        # ---------------------------------------------------------------------
+        if before.channel is None and after.channel is not None:
+            embed.title = "🔊 Ingresso Canale Vocale"
+            embed.description = f"{member.mention} è entrato nel canale vocale {after.channel.mention}."
+            embed.color = discord.Color.green()
+            embed.add_field(name="Canale", value=f"`{after.channel.name}` (ID: {after.channel.id})", inline=False)
+            await log_channel.send(embed=embed)
+            return
+
+        # ---------------------------------------------------------------------
+        # D. USCITA CANALE VOCALE (o Disconnessione Forzata)
+        # ---------------------------------------------------------------------
+        if before.channel is not None and after.channel is None:
+            embed.title = "🔇 Uscita Canale Vocale"
+            embed.description = f"{member.mention} ha lasciato il canale vocale `{before.channel.name}`."
+            embed.color = discord.Color.red()
+            embed.add_field(name="Canale", value=f"`{before.channel.name}` (ID: {before.channel.id})", inline=False)
+
+            entry = await self._find_audit_entry(member.guild, discord.AuditLogAction.member_disconnect, member.id)
+            if entry and entry.user:
+                embed.add_field(name="Disconnesso da", value=entry.user.mention, inline=True)
+
+            await log_channel.send(embed=embed)
+            return
 
 
 async def setup(bot: commands.Bot):
