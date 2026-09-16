@@ -104,6 +104,8 @@ with open('configs/blacklist.json') as f:
         blacklist.append(word)
 
 
+
+
 class CloseDMChannelView(discord.ui.View):
     """View persistente con pulsante per consentire allo staff di chiudere il canale."""
 
@@ -186,6 +188,22 @@ class DiscordBot(commands.Bot):
         self.add_view(TicketView())
         self.add_view(TicketControlView())
         self.add_view(CloseDMChannelView())  # Registra la view per renderla persistente
+
+    async def notify_role_change(self, member: discord.Member, role: discord.Role, action: str):
+        """
+        Sends a direct message to the user informing them of role addition or removal.
+        Silently fails if the user has DMs disabled or bot is blocked.
+        """
+        embed = EmbedFactory.create_embed(
+            title="Ruolo cambiato",
+            description=f"Hai **{action}** il ruolo: **{role.name}** in **{member.guild.name}**.",
+            colour=discord.Color.green() if action == "selezionato" else discord.Color.red(),
+            author="Role System"
+        )
+        try:
+            await member.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            logger.warning(f"Could not send role notification DM to {member.name} ({member.id}).")
 
     @tasks.loop(hours=24)
     async def check_birthday(self):
@@ -549,18 +567,62 @@ class DiscordBot(commands.Bot):
             else:
                 logger.info("Threshold not met (or already surpassed), skipping embed creation.")
 
-        role_data = roles_system.get_role(payload.message_id, emoji_identifier)
-        if role_data:
-            role_id = role_data[0] if isinstance(role_data, tuple) else role_data
+        # --- Self-Roles System ---
+        role_id = roles_system.get_role(payload.message_id, str(emoji_identifier))
+        if role_id:
             try:
-                server: discord.Guild = self.get_guild(payload.guild_id) or await self.fetch_guild(payload.guild_id)
-                role: discord.Role = server.get_role(role_id) or await server.fetch_role(role_id)
+                server: discord.Guild = self.get_guild(payload.guild_id) or await self.fetch_guild(
+                    payload.guild_id)
+                member = payload.member or await server.fetch_member(payload.user_id)
+                target_role: discord.Role = server.get_role(role_id) or await server.fetch_role(role_id)
 
-                if role:
-                    await payload.member.add_roles(role)
-                    logger.info(f"Successfully added role: {role.name}")
+                # Check if multiselect is disabled
+                if not roles_system.is_multiselect(payload.message_id):
+                    all_message_roles = roles_system.get_all_roles_for_message(payload.message_id)
+                    roles_to_remove = []
+
+                    source_channel = self.get_channel(payload.channel_id) or await self.fetch_channel(
+                        payload.channel_id)
+                    target_message = None
+                    try:
+                        target_message = await source_channel.fetch_message(payload.message_id)
+                    except Exception:
+                        pass
+
+                    for r in all_message_roles:
+                        other_role_id = r["role_id"]
+                        other_emoji = r["emoji"]
+
+                        if other_role_id != role_id:
+                            other_role = server.get_role(other_role_id)
+                            if other_role and other_role in member.roles:
+                                roles_to_remove.append(other_role)
+
+                            # Remove the other reaction made by this user
+                            if target_message:
+                                try:
+                                    if str(other_emoji).isdigit():
+                                        reac_obj = self.get_emoji(int(other_emoji))
+                                    else:
+                                        reac_obj = other_emoji
+                                    if reac_obj:
+                                        await target_message.remove_reaction(reac_obj, member)
+                                except Exception:
+                                    pass
+
+                    if roles_to_remove:
+                        await member.remove_roles(*roles_to_remove,
+                                                  reason="Reaction Role: Single-select enforced")
+                        for old_role in roles_to_remove:
+                            await self.notify_role_change(member, old_role, "rimosso")
+
+                if target_role:
+                    if target_role not in member.roles:
+                        await member.add_roles(target_role, reason="Reaction Role added")
+                        logger.info(f"Successfully added role: {target_role.name} to {member.name}")
+                        await self.notify_role_change(member, target_role, "selezionato")
             except Exception as e:
-                logger.error(f"Failed to add role. Error: {e}")
+                logger.error(f"Failed to add role. Error: {e}", exc_info=e)
 
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
         logger.info(f"Payload: {payload}")
@@ -612,20 +674,21 @@ class DiscordBot(commands.Bot):
                         except discord.Forbidden:
                             logger.error("Bot lacks permissions in the board channel.")
 
-        role_data = roles_system.get_role(payload.message_id, emoji_identifier)
-        if not role_data:
-            logger.warning(f"No role mapping found for message ID {payload.message_id} and emoji {emoji_identifier}")
+        # --- Self-Roles System ---
+        role_id = roles_system.get_role(payload.message_id, str(emoji_identifier))
+        if not role_id:
             return
-
-        role_id = role_data[0] if isinstance(role_data, tuple) else role_data
 
         try:
             role: discord.Role = guild.get_role(role_id) or await guild.fetch_role(role_id)
-            if role:
-                await member.remove_roles(role)
+            if role and role in member.roles:
+                await member.remove_roles(role, reason="Reaction Role removed")
                 logger.info(f"Removed role: {role.name} from {member.name}")
+                await self.notify_role_change(member, role, "rimosso")
         except discord.NotFound:
             logger.warning(f"Role with ID {role_id} not found in guild {guild.id}")
+        except Exception as e:
+            logger.error(f"Failed to remove role: {e}")
 
 
 bot = DiscordBot()

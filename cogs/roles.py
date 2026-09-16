@@ -1,173 +1,199 @@
+import os
 import re
+from typing import Optional
+
 import discord
-from discord.ext import commands
-import random
 from discord import app_commands
-import __future__
+from discord.ext import commands
+
 from config import GUILD_ID
-from utils import roles_system
 from utils.debug import Logger
 from utils.embed_factory import EmbedFactory
-
-import os
-
 from utils.roles_system import RoleSystem
 
-logger = Logger(os.path.basename(__file__).replace(".py",""))
+logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
-# All cogs need to inherit the class commands.Cog
+
 class Roles(commands.Cog):
-    def __init__(self, bot, role_system: RoleSystem):
+    def __init__(self, bot: commands.Bot, role_system: RoleSystem):
         self.bot = bot
         self.role_system = role_system
-        self.bot.tree.add_command(self.MessageCommands(self.role_system))
-    
+        self.bot.tree.add_command(self.MessageCommands(self.bot, self.role_system))
 
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.guilds(*GUILD_ID)
     class MessageCommands(app_commands.Group):
-        """
-        Group of commands related to self-roles integration
-        """
-        def __init__(self, role_system: RoleSystem):
+        def __init__(self, bot: commands.Bot, role_system: RoleSystem):
             super().__init__(name="message", description="Manage role messages")
+            self.bot = bot
             self.role_system = role_system
-            self.add_command(self.RoleSpecific(self.role_system))
-            logger.info("Loaded command group: RoleCommands")
-        
+            self.add_command(self.RoleSpecific(self.bot, self.role_system))
 
-        @app_commands.command(name="create", description="Create a new role message.")
-        @app_commands.describe(title="Title of the role message", description="Custom description")
+        @app_commands.command(
+            name="multiselect",
+            description="Enable or disable multiple role selection on a message."
+        )
+        @app_commands.describe(
+            message_id="ID of the message",
+            enabled="True for multiselect, False for single-choice only"
+        )
         @app_commands.checks.has_permissions(administrator=True)
         @app_commands.guilds(*GUILD_ID)
-        async def create(self, interaction: discord.Interaction, title: str, description: str):
-            logger.info("Create a new self-role message")
-            
+        async def multiselect(self, interaction: discord.Interaction, message_id: str, enabled: bool):
+            try:
+                msg_id = int(message_id.strip())
+            except ValueError:
+                return await interaction.response.send_message("Invalid Message ID format.", ephemeral=True)
+
+            self.role_system.set_multiselect(msg_id, enabled)
+            mode_text = "Multiple roles allowed" if enabled else "Single role only (exclusive)"
+
             embed = EmbedFactory.create_embed(
-                title = title,
-                description=description,
-                colour=discord.Color.random(),
-                author="Role System",
+                title="Multiselect Updated",
+                description=f"Message `{msg_id}` selection mode set to: **{mode_text}**.",
+                colour=discord.Color.green(),
+                author="Role System"
             )
-            interaction_callback = await interaction.response.send_message(embed=embed)
-    
-            self.role_system.create_message(interaction_callback.message_id)
-        
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
         @app_commands.checks.has_permissions(administrator=True)
         @app_commands.guilds(*GUILD_ID)
         class RoleSpecific(app_commands.Group):
-            def __init__(self, role_system: RoleSystem):
+            def __init__(self, bot: commands.Bot, role_system: RoleSystem):
                 super().__init__(name="role", description="Manage roles for messages.")
+                self.bot = bot
                 self.role_system = role_system
-                logger.info("Loaded command group: RoleSpecific")
 
-            @app_commands.command(name="add", description="Add new role to a message.") 
-            @app_commands.checks.has_permissions(administrator=True)
-            @app_commands.describe(
-                message="Message you want to add role to.",
-                role="Role you want to add.",
-                emoji="Emoji to identify said role."
+            @app_commands.command(
+                name="add",
+                description="Add a reaction role to an existing message."
             )
+            @app_commands.describe(
+                message_id="ID of the target message",
+                emoji="Emoji to identify the role (Unicode or custom)",
+                role="Role to give/remove",
+                channel="Channel of the message (defaults to the current channel)"
+            )
+            @app_commands.checks.has_permissions(administrator=True)
             @app_commands.guilds(*GUILD_ID)
-            async def add(self, interaction: discord.Interaction, message: str, role: discord.Role, emoji: str):
-                await interaction.response.defer()
-                emoji_id = None
-                match = re.match(r'<a?:\w+:(\d+)>', emoji)
+            async def add(
+                self,
+                interaction: discord.Interaction,
+                message_id: str,
+                emoji: str,
+                role: discord.Role,
+                channel: Optional[discord.TextChannel] = None
+            ):
+                await interaction.response.defer(ephemeral=True)
+
+                try:
+                    msg_id = int(message_id.strip())
+                except ValueError:
+                    return await interaction.followup.send("Message ID must be numeric.", ephemeral=True)
+
+                target_channel = channel or interaction.channel
+                try:
+                    target_message = await target_channel.fetch_message(msg_id)
+                except discord.NotFound:
+                    return await interaction.followup.send(
+                        f"Message `{msg_id}` was not found in {target_channel.mention}.", ephemeral=True
+                    )
+                except discord.Forbidden:
+                    return await interaction.followup.send(
+                        f"I lack permissions to read messages in {target_channel.mention}.", ephemeral=True
+                    )
+
+                # Parse emoji to determine identifier
+                emoji_clean = emoji.strip()
+                match = re.match(r'<a?:\w+:(\d+)>', emoji_clean)
                 if match:
-                    emoji_id = int(match.group(1))
+                    emoji_identifier = match.group(1)  # Custom emoji ID
+                else:
+                    try:
+                        partial = discord.PartialEmoji.from_str(emoji_clean)
+                        emoji_identifier = str(partial.id) if partial.id else partial.name
+                    except Exception:
+                        emoji_identifier = emoji_clean
 
                 try:
-                    partial = discord.PartialEmoji.from_str(emoji)
-                    if partial.id != None:
-                        emoji_id = partial.id
-                    else:
-                        emoji_id = partial.name
-                except Exception as e:
-                    logger.error("Error adding role: ", exc_info=e)
-                    await interaction.response.send_message("Error")
-                
-                if emoji_id == None:
-                    emoji_id = emoji
+                    # Save mapping in database
+                    self.role_system.add_role(msg_id, role.id, emoji_identifier)
 
-                try:
-                    self.role_system.add_role(
-                        message,
-                        role.id,
-                        emoji_id
-                        )
-                    
-
-                    msg = await interaction.channel.fetch_message(message)
-
-                    await msg.add_reaction(emoji)
+                    # Add reaction to message
+                    await target_message.add_reaction(emoji_clean)
 
                     embed = EmbedFactory.create_embed(
-                        title="Successo!",
-                        description=f"{emoji} {role.mention} has been added!",
+                        title="Success!",
+                        description=f"Reaction {emoji_clean} linked to {role.mention} on message `{msg_id}`.",
                         colour=discord.Color.green(),
                         author="Role System"
                     )
+                    await interaction.followup.send(embed=embed, ephemeral=True)
 
+                except discord.HTTPException as e:
+                    embed = EmbedFactory.create_embed(
+                        title="Discord Error",
+                        description=f"Could not react with emoji: {e}",
+                        colour=discord.Color.red(),
+                        author="Role System"
+                    )
                     await interaction.followup.send(embed=embed, ephemeral=True)
                 except Exception as e:
+                    logger.error("Error adding reaction role: ", exc_info=e)
                     embed = EmbedFactory.create_embed(
                         title="Error",
-                        colour=discord.Color.red(),
-                        description=e,
-                        author="Role System"
-                    )
-                    await interaction.followup.send(embed=embed)
-                    logger.error("Error in role syste: ", exc_info=e)
-
-            @app_commands.command(name="reset", description="Reset all roles.")
-            @app_commands.checks.has_permissions(administrator=True)
-            @app_commands.guilds(*GUILD_ID)
-            async def reset(self, interaction: discord.Interaction):
-
-                self.role_system.reset()
-
-                embed = EmbedFactory.create_embed(
-                    title="Reset roles!",
-                    description="Reset all the roles.",
-                    colour=discord.Color.red(),
-                    author="Role System",
-                    thumbnail=interaction.user.avatar.url
-                )
-
-                await interaction.response.send_message(embed=embed)
-            
-            @app_commands.command(name="remove", description="Remove a role from a message.")
-            @app_commands.describe(message="Message you want to remove the role from.", role="Role you want to remove.")
-            @app_commands.checks.has_permissions(administrator=True)
-            @app_commands.guilds(*GUILD_ID)
-            async def remove(self, interaction: discord.Interaction, message: str, role: discord.Role):
-                await interaction.response.defer()
-                try:
-                    msg: discord.Message = await interaction.channel.fetch_message(message)
-                except discord.NotFound:
-                    embed = EmbedFactory.create_embed(
-                        title="Error",
-                        description="The message was not found.",
+                        description=str(e),
                         colour=discord.Color.red(),
                         author="Role System"
                     )
                     await interaction.followup.send(embed=embed, ephemeral=True)
 
-                logger.info(f"Message: {msg}")
+            @app_commands.command(name="remove", description="Remove a role from a message.")
+            @app_commands.describe(
+                message_id="ID of the message",
+                role="Role you want to remove",
+                channel="Channel of the message (defaults to the current channel)"
+            )
+            @app_commands.checks.has_permissions(administrator=True)
+            @app_commands.guilds(*GUILD_ID)
+            async def remove(
+                self,
+                interaction: discord.Interaction,
+                message_id: str,
+                role: discord.Role,
+                channel: Optional[discord.TextChannel] = None
+            ):
+                await interaction.response.defer(ephemeral=True)
+                try:
+                    msg_id = int(message_id.strip())
+                except ValueError:
+                    return await interaction.followup.send("Message ID must be numeric.", ephemeral=True)
 
-                emoji = self.role_system.get_emoji(message, role.id)
+                target_channel = channel or interaction.channel
+                emoji = self.role_system.get_emoji(msg_id, role.id)
 
-                await msg.clear_reaction(emoji)
-                
-                self.role_system.remove_role(message, role.id)
+                if emoji:
+                    try:
+                        msg = await target_channel.fetch_message(msg_id)
+                        # Remove bot reaction
+                        if emoji.isdigit():
+                            custom_emoji = self.bot.get_emoji(int(emoji))
+                            if custom_emoji:
+                                await msg.clear_reaction(custom_emoji)
+                        else:
+                            await msg.clear_reaction(emoji)
+                    except Exception:
+                        pass
 
+                self.role_system.remove_role(msg_id, role.id)
                 embed = EmbedFactory.create_embed(
-                    title="Removed role",
-                    description=f"You succesfully removed {role.mention} from the message",
+                    title="Removed Role",
+                    description=f"Successfully removed {role.mention} from message `{msg_id}`.",
                     colour=discord.Color.green(),
                     author="Role System"
                 )
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
+
 async def setup(bot):
-    await bot.add_cog(Roles(bot))
+    pass
