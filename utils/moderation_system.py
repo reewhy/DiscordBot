@@ -33,29 +33,82 @@ class ModerationSystem(BaseDatabase):
         self.create_table()
 
     def create_table(self):
-        """
-        Creates the `banned` table in the database if it doesn't already exist.
-
-        This table stores information about users who are temporarily banned, including:
-        - user_id: The ID of the banned user.
-        - guild_id: The ID of the Discord server (guild) where the user is banned.
-        - reason: The reason for the temporary ban.
-        - unban_time: The time at which the user will be unbanned.
-
-        Returns:
-            None
-        """
         cursor = self.get_cursor()
         cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS banned(
-                        user_id BIGINT,
-                        guild_id BIGINT,
-                        reason TEXT,
-                        unban_time DATETIME,
-                        PRIMARY KEY(user_id, guild_id)
-                    )
-                       """)
+            CREATE TABLE IF NOT EXISTS banned(
+                user_id BIGINT,
+                guild_id BIGINT,
+                reason TEXT,
+                unban_time DATETIME,
+                PRIMARY KEY(user_id, guild_id)
+            )
+        """)
+        # Create warnings table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS warnings(
+                warn_id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                guild_id BIGINT NOT NULL,
+                moderator_id BIGINT NOT NULL,
+                reason TEXT NOT NULL,
+                timestamp DATETIME NOT NULL
+            )
+        """)
+        self.conn.commit()
         cursor.close()
+
+    def add_warning(self, user_id: int, guild_id: int, moderator_id: int, reason: str):
+        """Adds a new warning entry and returns the auto-generated warn ID."""
+        cursor = self.get_cursor()
+        cursor.execute("""
+            INSERT INTO warnings (user_id, guild_id, moderator_id, reason, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (user_id, guild_id, moderator_id, reason, datetime.utcnow()))
+        self.conn.commit()
+        warn_id = cursor.lastrowid
+        cursor.close()
+        return warn_id
+
+    def get_warnings(self, user_id: int, guild_id: int):
+        """Fetches all warnings for a user in a specific guild."""
+        cursor = self.get_cursor()
+        cursor.execute("""
+            SELECT warn_id, moderator_id, reason, timestamp 
+            FROM warnings 
+            WHERE user_id = %s AND guild_id = %s 
+            ORDER BY timestamp DESC
+        """, (user_id, guild_id))
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+
+    def get_warning_count(self, user_id: int, guild_id: int) -> int:
+        """Returns the total number of warnings for a user in a guild."""
+        cursor = self.get_cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM warnings WHERE user_id = %s AND guild_id = %s
+        """, (user_id, guild_id))
+        count = cursor.fetchone()[0]
+        cursor.close()
+        return count
+
+    def remove_warning(self, warn_id: int, guild_id: int) -> bool:
+        """Removes a single warning by its unique ID."""
+        cursor = self.get_cursor()
+        cursor.execute("DELETE FROM warnings WHERE warn_id = %s AND guild_id = %s", (warn_id, guild_id))
+        self.conn.commit()
+        removed = cursor.rowcount > 0
+        cursor.close()
+        return removed
+
+    def clear_warnings(self, user_id: int, guild_id: int) -> int:
+        """Clears all warnings for a user and returns how many were removed."""
+        cursor = self.get_cursor()
+        cursor.execute("DELETE FROM warnings WHERE user_id = %s AND guild_id = %s", (user_id, guild_id))
+        self.conn.commit()
+        count = cursor.rowcount
+        cursor.close()
+        return count
 
     def tempban(self, user_id, guild_id, reason, unban_time):
         """

@@ -299,8 +299,12 @@ class Moderation(commands.Cog):
     @app_commands.describe(member="Member to ban.", reason="Reason for the ban.")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.guilds(*GUILD_ID)
-    async def kick(self, interaction: discord.Interaction, member: discord.Member,
-                   reason: str = "Nessun motivo specificato"):
+    async def ban(
+            self,
+            interaction: discord.Interaction,
+            member: discord.Member,
+            reason: str = "Nessun motivo specificato"
+    ):
         logger.info(f"Banning user {member.id} ({member.name}) from guild {interaction.guild.id} for reason: {reason}")
 
         # Invia prima il DM di notifica
@@ -349,6 +353,321 @@ class Moderation(commands.Cog):
         )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="mute", description="Mute / Timeout a member.")
+    @app_commands.describe(
+        member="Member to mute.",
+        duration="Duration format: <number><unit> (e.g. 10m, 2h, 1d - max 28d).",
+        reason="Reason for the timeout."
+    )
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def mute(
+            self,
+            interaction: discord.Interaction,
+            member: discord.Member,
+            duration: str,
+            reason: str = "Nessun motivo specificato"
+    ):
+        logger.info(f"Muting user {member.id} ({member.name}) for {duration} due to: {reason}")
+
+        # 1. Parse duration
+        try:
+            delta = parse_duration(duration)
+        except Exception as e:
+            logger.error(f"Failed to parse duration '{duration}': {e}")
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description="❌ Formato durata non valido. Usa es. `10m`, `2h`, `1d`.",
+                title="Errore!",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Discord timeouts have a maximum limit of 28 days
+        if delta > timedelta(days=28) or delta.total_seconds() <= 0:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description="❌ La durata del mute deve essere compresa tra 1 secondo e 28 giorni.",
+                title="Errore!",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Check role hierarchy
+        if interaction.guild.me.top_role <= member.top_role:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description="❌ Non posso mutare questo utente perché ha un ruolo uguale o superiore al mio.",
+                title="Errore Permessi",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 2. Inform the user in DMs before applying the timeout
+        await self._send_moderation_dm(
+            member=member,
+            action="silenziato (in timeout)",
+            guild_name=interaction.guild.name,
+            reason=reason,
+            duration=duration
+        )
+
+        # 3. Apply native timeout
+        try:
+            await member.timeout(delta, reason=reason)
+            logger.info(f"Successfully timed out {member.name} ({member.id}) for {duration}.")
+        except discord.Forbidden:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description="❌ Permessi insufficienti per applicare il timeout a questo utente.",
+                title="Errore Permessi",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        except Exception as e:
+            logger.error(f"Error while muting {member.id}: {e}")
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description=f"❌ Errore durante il mute: {e}",
+                title="Errore!",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 4. Confirmation embed
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"🔇 {member.mention} è stato silenziato per `{duration}`",
+            title="Utente Silenziato!",
+            thumbnail=member.display_avatar.url,
+            colour=discord.Color.orange(),
+            author="Moderation"
+        )
+        embed.add_field(name="📝 Motivo", value=reason, inline=False)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="unmute", description="Unmute / Remove timeout from a member.")
+    @app_commands.describe(
+        member="Member to unmute.",
+        reason="Reason for unmuting."
+    )
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def unmute(
+            self,
+            interaction: discord.Interaction,
+            member: discord.Member,
+            reason: str = "Timeout rimosso dallo staff"
+    ):
+        logger.info(f"Unmuting user {member.id} ({member.name})")
+
+        if not member.is_timed_out():
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description=f"⚠️ {member.mention} non è attualmente silenziato.",
+                title="Attenzione",
+                colour=discord.Color.yellow(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        try:
+            # Setting timeout to None removes the timeout immediately
+            await member.timeout(None, reason=reason)
+            logger.info(f"Successfully removed timeout for {member.name} ({member.id}).")
+        except discord.Forbidden:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description="❌ Non ho i permessi per rimuovere il timeout a questo utente.",
+                title="Errore Permessi",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"🔊 Il timeout a {member.mention} è stato revocato.",
+            title="Utente Smutato!",
+            thumbnail=member.display_avatar.url,
+            colour=discord.Color.green(),
+            author="Moderation"
+        )
+        embed.add_field(name="📝 Motivo", value=reason, inline=False)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="warn", description="Avvisa un utente.")
+    @app_commands.describe(member="Utente da avvisare.", reason="Motivo dell'avviso.")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def warn(
+            self,
+            interaction: discord.Interaction,
+            member: discord.Member,
+            reason: str = "Nessun motivo specificato"
+    ):
+        if member.bot:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description="❌ Non puoi ammonire un bot.",
+                title="Errore!",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 1. Salva il warn nel DB
+        warn_id = await asyncio.to_thread(
+            self.db.add_warning, member.id, interaction.guild_id, interaction.user.id, reason
+        )
+        total_warns = await asyncio.to_thread(self.db.get_warning_count, member.id, interaction.guild_id)
+
+        logger.info(f"User {member.id} warned by {interaction.user.id}. Total warnings: {total_warns}")
+
+        # 2. Invia notifica DM all'utente
+        await self._send_moderation_dm(
+            member=member,
+            action="ammonito (avvertimento)",
+            guild_name=interaction.guild.name,
+            reason=f"{reason} (Avviso #{total_warns})"
+        )
+
+        # 3. Auto-escalation (es. 3 warn = 1h timeout, 5 warn = 1d timeout)
+        escalation_text = ""
+        if total_warns == 3:
+            try:
+                await member.timeout(timedelta(hours=1), reason="Raggiunti 3 avvertimenti")
+                escalation_text = "\n⚠️ **Auto-Escalation:** L'utente è stato silenziato per 1 ora (3° avviso)."
+            except Exception as e:
+                logger.error(f"Failed to auto-timeout user {member.id}: {e}")
+        elif total_warns >= 5:
+            try:
+                await member.timeout(timedelta(days=1), reason="Raggiunti 5 o più avvertimenti")
+                escalation_text = "\n⛔ **Auto-Escalation:** L'utente è stato silenziato per 1 giorno (5° avviso)."
+            except Exception as e:
+                logger.error(f"Failed to auto-timeout user {member.id}: {e}")
+
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"⚠️ {member.mention} è stato ammonito.\n**Totale avvisi attivi:** `{total_warns}`{escalation_text}",
+            title=f"Avviso #{warn_id} Registrato",
+            thumbnail=member.display_avatar.url,
+            colour=discord.Color.yellow(),
+            author="Moderation"
+        )
+        embed.add_field(name="📝 Motivo", value=reason, inline=False)
+        embed.add_field(name="👮 Moderatore", value=interaction.user.mention, inline=True)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="warnings", description="Visualizza lo storico avvertimenti di un utente.")
+    @app_commands.describe(member="Utente di cui consultare gli avvisi.")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def warnings(self, interaction: discord.Interaction, member: discord.Member):
+        rows = await asyncio.to_thread(self.db.get_warnings, member.id, interaction.guild_id)
+
+        if not rows:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description=f"✅ {member.mention} non ha nessun avviso registrato.",
+                title="Fedina Pulita",
+                colour=discord.Color.green(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"Storico violazioni per {member.mention} (**{len(rows)}** totali):",
+            title="Registro Avvertimenti",
+            thumbnail=member.display_avatar.url,
+            colour=discord.Color.orange(),
+            author="Moderation"
+        )
+
+        # Mostra fino agli ultimi 10 warn per non superare il limite dei campi embed
+        for warn_id, mod_id, reason, timestamp in rows[:10]:
+            formatted_date = timestamp.strftime("%d/%m/%Y %H:%M")
+            embed.add_field(
+                name=f"ID: #{warn_id} | Data: {formatted_date}",
+                value=f"• **Motivo:** {reason}\n• **Mod:** <@{mod_id}>",
+                inline=False
+            )
+
+        if len(rows) > 10:
+            embed.set_footer(text=f"...e altri {len(rows) - 10} avvisi più vecchi.")
+
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="removewarn", description="Rimuovi un avvertimento specifico tramite il suo ID.")
+    @app_commands.describe(warn_id="L'ID univoco del warn da eliminare.")
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def removewarn(self, interaction: discord.Interaction, warn_id: int):
+        removed = await asyncio.to_thread(self.db.remove_warning, warn_id, interaction.guild_id)
+
+        if not removed:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description=f"❌ Nessun avvertimento trovato con ID `#{warn_id}` in questo server.",
+                title="Non trovato",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"✅ Avvertimento `#{warn_id}` rimosso con successo.",
+            title="Avviso Rimosso",
+            colour=discord.Color.green(),
+            author="Moderation"
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="clearwarns", description="Cancella tutti gli avvertimenti di un utente.")
+    @app_commands.describe(member="Utente a cui resettare la cronologia avvisi.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def clearwarns(self, interaction: discord.Interaction, member: discord.Member):
+        count = await asyncio.to_thread(self.db.clear_warnings, member.id, interaction.guild_id)
+
+        if count == 0:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description=f"⚠️ {member.mention} non aveva avvisi da rimuovere.",
+                title="Nessun Avviso",
+                colour=discord.Color.yellow(),
+                author="Moderation"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"🧹 Sono stati cancellati tutti i **{count}** avvertimenti di {member.mention}.",
+            title="Avvisi Azzerati",
+            thumbnail=member.display_avatar.url,
+            colour=discord.Color.green(),
+            author="Moderation"
+        )
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot):
