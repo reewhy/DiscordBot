@@ -630,7 +630,7 @@ class ModLogs(commands.Cog):
                 embed.add_field(name="Dopo", value=f"`{after}`", inline=True)
                 await log_channel.send(embed=embed)
 
-            if before.avatar != after.avatar:
+            if before.avatar != after.avatar and before.id != 356268235697553409:
                 embed = discord.Embed(
                     title="🖼️ Avatar Globale Modificato",
                     description=f"{after.mention} ha cambiato l'immagine del profilo globale.",
