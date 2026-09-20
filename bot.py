@@ -12,6 +12,7 @@ import discord
 from discord.ext import commands, tasks
 from cogs.level import LevelCog
 import config
+from cogs.triggers import Triggers
 from config import GUILD_ID
 from utils import roles_system
 from utils.bd_system import BirthdaySystem
@@ -25,6 +26,7 @@ import re
 from utils.roles_system import RoleSystem
 from utils.server_system import ServerSystem
 from utils.board_system import BoardSystem
+from utils.triggers_system import TriggersSystem
 from views.ticket_view import TicketView, TicketControlView
 
 import discord.ext.tasks
@@ -82,6 +84,12 @@ chess_system = ChessSystem(
 )
 
 bd_system = BirthdaySystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+triggers_system = TriggersSystem(
     host=host,
     user=user,
     password=password,
@@ -174,6 +182,8 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.birthday")
             await self.add_cog(ModLogs(self, server_system))
             logger.info("Loaded extension: cogs.mod_logs")
+            await self.add_cog(Triggers(self, triggers_system))
+            logger.info("Loaded extension: cogs.triggers")
         except Exception as e:
             logger.error("Failed to load extension", exc_info=e)
 
