@@ -105,6 +105,7 @@ class Basic(commands.Cog):
     # ---------------------------------------------------------
     @app_commands.command(name="embed", description="Apre un modulo per creare un embed personalizzato.")
     @app_commands.guilds(*GUILD_ID)
+    @app_commands.checks.has_permissions(administrator=True)
     async def create_embed_modal(self, interaction: discord.Interaction):
         await interaction.response.send_modal(EmbedModal())
 
@@ -119,6 +120,7 @@ class Basic(commands.Cog):
         image_url="URL di un'immagine da mostrare in grande.",
         thumbnail_url="URL di una miniatura da mostrare in alto a destra."
     )
+    @app_commands.checks.has_permissions(administrator=True)
     @app_commands.guilds(*GUILD_ID)
     async def quick_embed(
         self,
