@@ -9,6 +9,9 @@ from utils.debug import Logger
 from utils.moderation_system import ModerationSystem
 import os
 from config import GUILD_ID
+import re
+from config import DM_CATEGORY_ID
+from views.ticket_view import CloseDMChannelView
 
 # Initialize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
@@ -668,6 +671,132 @@ class Moderation(commands.Cog):
             author="Moderation"
         )
         await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="opendm",
+        description="Apri una sessione di supporto DM con un utente direttamente dal server."
+    )
+    @app_commands.describe(
+        member="L'utente con cui aprire la chat.",
+        initial_message="Il primo messaggio / motivazione da recapitare all'utente."
+    )
+    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def opendm(
+            self,
+            interaction: discord.Interaction,
+            member: discord.Member,
+            initial_message: str = "Un membro dello staff ha aperto questo canale per comunicare con te."
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if member.bot:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description="❌ Non puoi aprire un ticket DM con un bot.",
+                title="Errore!",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        guild = interaction.guild
+        category = discord.utils.get(guild.categories, id=DM_CATEGORY_ID)
+
+        if not category:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description=f"❌ Categoria DM con ID `{DM_CATEGORY_ID}` non trovata nel server.",
+                title="Errore Configurazione",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        # 1. Controlla se esiste già un canale aperto per questo utente
+        for ch in category.text_channels:
+            if ch.topic and str(member.id) in ch.topic:
+                embed = EmbedFactory.create_embed(
+                    interaction=interaction,
+                    description=f"⚠️ Esiste già un canale DM aperto per {member.mention}: {ch.mention}",
+                    title="Canale Esistente",
+                    colour=discord.Color.yellow(),
+                    author="Moderation"
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+
+        # 2. Testa prima se l'utente accetta DM inviando il messaggio iniziale
+        user_dm_embed = discord.Embed(
+            title="Messaggio dallo Staff 🛡️",
+            description=(
+                f"Lo staff di **{guild.name}** ha aperto una conversazione con te.\n\n"
+                f"💬 **Messaggio:**\n{initial_message}\n\n"
+                "*(Rispondi direttamente a questo messaggio per comunicare con lo staff)*"
+            ),
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        if guild.icon:
+            user_dm_embed.set_thumbnail(url=guild.icon.url)
+        user_dm_embed.set_footer(text=guild.name, icon_url=guild.icon.url if guild.icon else None)
+
+        try:
+            await member.send(embed=user_dm_embed)
+        except (discord.Forbidden, discord.HTTPException):
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                description=f"❌ Impossibile inviare il DM a {member.mention}: l'utente ha i DM chiusi o ha bloccato il bot.",
+                title="Invio Fallito",
+                colour=discord.Color.red(),
+                author="Moderation"
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        # 3. Crea il canale nella categoria DM
+        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '', member.name.lower().replace(" ", "-"))
+        channel_name = f"dm-{clean_name}"[:100]
+
+        target_channel = await guild.create_text_channel(
+            name=channel_name,
+            category=category,
+            topic=f"Canale di supporto DM per: {member.name} (ID: {member.id})"
+        )
+
+        logger.info(
+            f"Staff member {interaction.user.name} initiated DM channel {target_channel.name} ({target_channel.id}) with {member.name}")
+
+        # 4. Invia l'header nel canale staff
+        header_embed = discord.Embed(
+            title="Conversazione DM Avviata dallo Staff",
+            description=(
+                f"Questo canale è stato aperto da {interaction.user.mention} per comunicare con {member.mention}.\n"
+                f"• Tutti i messaggi inviati qui dallo staff saranno recapitati in DM all'utente.\n"
+                f"• Tutti i messaggi dell'utente in DM appariranno automaticamente qui.\n"
+                f"• Quando la conversazione è conclusa, clicca su **Chiudi Canale** qui sotto."
+            ),
+            color=discord.Color.gold(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        header_embed.set_author(name=f"{member.name} ({member.id})", icon_url=member.display_avatar.url)
+        header_embed.add_field(name="Messaggio Iniziale Inviato", value=initial_message, inline=False)
+        header_embed.set_footer(text="Staff Support Panel")
+
+        await target_channel.send(content=f"@everyone | Chat aperta per {member.mention}", embed=header_embed,
+                                  view=CloseDMChannelView())
+
+        # 5. Conferma di avvenuta apertura
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            description=f"✅ Canale DM aperto con successo: {target_channel.mention}\nIl messaggio iniziale è stato recapitato all'utente.",
+            title="Sessione DM Creata",
+            colour=discord.Color.green(),
+            author="Moderation"
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot):

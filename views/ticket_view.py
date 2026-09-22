@@ -1,8 +1,11 @@
+import asyncio
+import datetime
 import uuid
 import discord
 from discord import app_commands
 from utils.debug import Logger
 import os
+import re
 
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
@@ -133,3 +136,44 @@ class TicketView(discord.ui.View):
             await interaction.followup.send("Error: I do not have permissions to create channels.", ephemeral=True)
         except discord.HTTPException as e:
             await interaction.followup.send(f"An error occurred while creating the ticket: {e}", ephemeral=True)
+
+class CloseDMChannelView(discord.ui.View):
+    """View persistente con pulsante per consentire allo staff di chiudere il canale."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Chiudi Canale",
+        style=discord.ButtonStyle.danger,
+        emoji="🔒",
+        custom_id="persistent_close_dm_channel_btn"
+    )
+    async def close_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        # Notifica opzionale all'utente nei DM che la sessione è conclusa
+        if interaction.channel.topic:
+            user_id_match = re.search(r'ID:\s*(\d+)', interaction.channel.topic)
+            if user_id_match:
+                user_id = int(user_id_match.group(1))
+                try:
+                    user = interaction.client.get_user(user_id) or await interaction.client.fetch_user(user_id)
+                    close_embed = discord.Embed(
+                        title="Ticket Chiuso",
+                        description="Il canale di supporto con lo staff è stato chiuso. Se hai ulteriore bisogno, invia un nuovo messaggio!",
+                        color=discord.Color.red(),
+                        timestamp=datetime.now(datetime.timezone.utc)
+                    )
+                    await user.send(embed=close_embed)
+                except Exception:
+                    pass
+
+        embed = discord.Embed(
+            description=f"🔒 Canale in chiusura da parte di {interaction.user.mention}...",
+            color=discord.Color.red()
+        )
+        await interaction.channel.send(embed=embed)
+        await asyncio.sleep(2)
+        await interaction.channel.delete(reason=f"Ticket DM chiuso da {interaction.user.name}")
+

@@ -14,6 +14,7 @@ from cogs.level import LevelCog
 import config
 from cogs.triggers import Triggers
 from config import GUILD_ID
+from config import DM_CATEGORY_ID
 from utils import roles_system
 from utils.bd_system import BirthdaySystem
 from utils.chess_db import ChessSystem
@@ -27,7 +28,7 @@ from utils.roles_system import RoleSystem
 from utils.server_system import ServerSystem
 from utils.board_system import BoardSystem
 from utils.triggers_system import TriggersSystem
-from views.ticket_view import TicketView, TicketControlView
+from views.ticket_view import TicketView, TicketControlView, CloseDMChannelView
 
 import discord.ext.tasks
 import datetime as dt
@@ -40,8 +41,6 @@ intents = discord.Intents.all()
 intents.message_content = True
 intents.voice_states = True
 intents.members = True
-
-DM_CATEGORY_ID = 1549228463133818930
 
 host = "localhost"
 user = "root"
@@ -110,49 +109,6 @@ with open('configs/blacklist.json') as f:
     d = json.load(f)
     for word in d["words"]:
         blacklist.append(word)
-
-
-
-
-class CloseDMChannelView(discord.ui.View):
-    """View persistente con pulsante per consentire allo staff di chiudere il canale."""
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="Chiudi Canale",
-        style=discord.ButtonStyle.danger,
-        emoji="🔒",
-        custom_id="persistent_close_dm_channel_btn"
-    )
-    async def close_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-
-        # Notifica opzionale all'utente nei DM che la sessione è conclusa
-        if interaction.channel.topic:
-            user_id_match = re.search(r'ID:\s*(\d+)', interaction.channel.topic)
-            if user_id_match:
-                user_id = int(user_id_match.group(1))
-                try:
-                    user = interaction.client.get_user(user_id) or await interaction.client.fetch_user(user_id)
-                    close_embed = discord.Embed(
-                        title="Ticket Chiuso",
-                        description="Il canale di supporto con lo staff è stato chiuso. Se hai ulteriore bisogno, invia un nuovo messaggio!",
-                        color=discord.Color.red(),
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    await user.send(embed=close_embed)
-                except Exception:
-                    pass
-
-        embed = discord.Embed(
-            description=f"🔒 Canale in chiusura da parte di {interaction.user.mention}...",
-            color=discord.Color.red()
-        )
-        await interaction.channel.send(embed=embed)
-        await asyncio.sleep(2)
-        await interaction.channel.delete(reason=f"Ticket DM chiuso da {interaction.user.name}")
 
 
 class DiscordBot(commands.Bot):
