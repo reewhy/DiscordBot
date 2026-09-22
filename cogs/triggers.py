@@ -3,11 +3,13 @@ from discord import app_commands
 from discord.ext import commands
 import asyncio
 import os
+import time
 from config import GUILD_ID
 from utils.embed_factory import EmbedFactory
 from utils.debug import Logger
 
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
+
 
 def format_response(template: str, message: discord.Message) -> str:
     """Replaces Carl-bot style variables with actual Discord data."""
@@ -36,8 +38,9 @@ class Triggers(commands.Cog):
     def __init__(self, bot: commands.Bot, trigger_db):
         self.bot = bot
         self.db = trigger_db
+        # Maps trigger_id -> unix_timestamp of last execution
+        self.last_triggered: dict[int, float] = {}
 
-    # Define guild_ids here on the parent group instead of on each child command
     trigger_group = app_commands.Group(
         name="trigger",
         description="Gestisci i trigger automatici in stile Carl-bot",
@@ -48,7 +51,8 @@ class Triggers(commands.Cog):
     @app_commands.describe(
         trigger="La parola o frase chiave che attiva la risposta.",
         response="La risposta del bot (supporta {user}, {server}, {channel}, ecc.).",
-        mode="Tipo di matching: 'contains' (default), 'exact', o 'startswith'."
+        mode="Tipo di matching: 'contains' (default), 'exact', o 'startswith'.",
+        cooldown="Tempo di attesa minimo tra attivazioni in secondi (default: 0)."
     )
     @app_commands.choices(mode=[
         app_commands.Choice(name="Contiene la parola (contains)", value="contains"),
@@ -61,7 +65,8 @@ class Triggers(commands.Cog):
         interaction: discord.Interaction,
         trigger: str,
         response: str,
-        mode: app_commands.Choice[str] = None
+        mode: app_commands.Choice[str] = None,
+        cooldown: app_commands.Range[int, 0, 86400] = 0
     ):
         match_mode = mode.value if mode else "contains"
 
@@ -70,7 +75,8 @@ class Triggers(commands.Cog):
             interaction.guild_id,
             trigger,
             response,
-            match_mode
+            match_mode,
+            cooldown
         )
 
         logger.info(f"Trigger #{trigger_id} added by {interaction.user.name} in guild {interaction.guild_id}")
@@ -84,8 +90,51 @@ class Triggers(commands.Cog):
         )
         embed.add_field(name="Keyword", value=f"`{trigger}`", inline=True)
         embed.add_field(name="Modalità", value=f"`{match_mode}`", inline=True)
+        embed.add_field(name="Cooldown", value=f"`{cooldown}s`", inline=True)
         embed.add_field(name="Risposta", value=response, inline=False)
 
+        await interaction.response.send_message(embed=embed)
+
+    @trigger_group.command(name="setcooldown", description="Modifica il cooldown di un trigger esistente.")
+    @app_commands.describe(
+        trigger_id="L'ID del trigger da modificare.",
+        cooldown="Nuovo cooldown in secondi (0 per disabilitarlo)."
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def set_cooldown(
+        self,
+        interaction: discord.Interaction,
+        trigger_id: int,
+        cooldown: app_commands.Range[int, 0, 86400]
+    ):
+        updated = await asyncio.to_thread(
+            self.db.set_cooldown,
+            interaction.guild_id,
+            trigger_id,
+            cooldown
+        )
+
+        if not updated:
+            embed = EmbedFactory.create_embed(
+                interaction=interaction,
+                title="Errore",
+                description=f"❌ Nessun trigger trovato con ID `#{trigger_id}` in questo server.",
+                colour=discord.Color.red(),
+                author="Triggers"
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Reset active in-memory cooldown timer
+        self.last_triggered.pop(trigger_id, None)
+
+        embed = EmbedFactory.create_embed(
+            interaction=interaction,
+            title="Cooldown Aggiornato! ⏱️",
+            description=f"Il cooldown per il trigger `#{trigger_id}` è ora impostato a **{cooldown} secondi**.",
+            colour=discord.Color.green(),
+            author="Triggers"
+        )
         await interaction.response.send_message(embed=embed)
 
     @trigger_group.command(name="remove", description="Rimuovi un trigger tramite il suo ID.")
@@ -104,6 +153,8 @@ class Triggers(commands.Cog):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
+
+        self.last_triggered.pop(trigger_id, None)
 
         embed = EmbedFactory.create_embed(
             interaction=interaction,
@@ -139,10 +190,10 @@ class Triggers(commands.Cog):
         )
 
         for row in rows[:25]:
-            t_id, trigger_text, resp, mode = row
+            t_id, trigger_text, resp, mode, cd = row
             truncated_resp = resp if len(resp) <= 50 else resp[:47] + "..."
             embed.add_field(
-                name=f"ID #{t_id} | `{trigger_text}` ({mode})",
+                name=f"ID #{t_id} | `{trigger_text}` ({mode}) | CD: `{cd}s`",
                 value=f"➜ {truncated_resp}",
                 inline=False
             )
@@ -156,6 +207,7 @@ class Triggers(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def clear_triggers(self, interaction: discord.Interaction):
         count = await asyncio.to_thread(self.db.clear_triggers, interaction.guild_id)
+        self.last_triggered.clear()
 
         embed = EmbedFactory.create_embed(
             interaction=interaction,
@@ -180,8 +232,9 @@ class Triggers(commands.Cog):
             return
 
         content = message.content.lower().strip()
+        now = time.time()
 
-        for _, trigger_text, response, mode in triggers:
+        for t_id, trigger_text, response, mode, cooldown in triggers:
             trigger_lower = trigger_text.lower()
             matched = False
 
@@ -193,6 +246,13 @@ class Triggers(commands.Cog):
                 matched = True
 
             if matched:
+                # Check cooldown
+                if cooldown > 0:
+                    last_time = self.last_triggered.get(t_id, 0.0)
+                    if now - last_time < cooldown:
+                        return  # Still in cooldown, quietly ignore
+
+                self.last_triggered[t_id] = now
                 formatted_response = format_response(response, message)
                 try:
                     await message.channel.send(formatted_response)

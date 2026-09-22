@@ -15,18 +15,34 @@ class TriggersSystem(BaseDatabase):
                 trigger_text VARCHAR(255) NOT NULL,
                 response TEXT NOT NULL,
                 match_mode VARCHAR(20) NOT NULL DEFAULT 'contains',
+                cooldown INT NOT NULL DEFAULT 0,
                 INDEX idx_guild (guild_id)
             )
         """)
         self.conn.commit()
+
+        # Migrate existing table if 'cooldown' column doesn't exist yet
+        try:
+            cursor.execute("ALTER TABLE triggers ADD COLUMN cooldown INT NOT NULL DEFAULT 0")
+            self.conn.commit()
+        except mysql.connector.Error:
+            pass  # Column already exists
+
         cursor.close()
 
-    def add_trigger(self, guild_id: int, trigger_text: str, response: str, match_mode: str = "contains") -> int:
+    def add_trigger(
+        self,
+        guild_id: int,
+        trigger_text: str,
+        response: str,
+        match_mode: str = "contains",
+        cooldown: int = 0
+    ) -> int:
         cursor = self.get_cursor()
         cursor.execute("""
-            INSERT INTO triggers (guild_id, trigger_text, response, match_mode)
-            VALUES (%s, %s, %s, %s)
-        """, (guild_id, trigger_text.lower(), response, match_mode))
+            INSERT INTO triggers (guild_id, trigger_text, response, match_mode, cooldown)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (guild_id, trigger_text.lower(), response, match_mode, max(0, cooldown)))
         self.conn.commit()
         last_id = cursor.lastrowid
         cursor.close()
@@ -43,10 +59,23 @@ class TriggersSystem(BaseDatabase):
         cursor.close()
         return deleted
 
+    def set_cooldown(self, guild_id: int, trigger_id: int, cooldown: int) -> bool:
+        """Updates the cooldown duration (in seconds) of an existing trigger."""
+        cursor = self.get_cursor()
+        cursor.execute("""
+            UPDATE triggers
+            SET cooldown = %s
+            WHERE trigger_id = %s AND guild_id = %s
+        """, (max(0, cooldown), trigger_id, guild_id))
+        self.conn.commit()
+        updated = cursor.rowcount > 0
+        cursor.close()
+        return updated
+
     def get_triggers(self, guild_id: int):
         cursor = self.get_cursor()
         cursor.execute("""
-            SELECT trigger_id, trigger_text, response, match_mode 
+            SELECT trigger_id, trigger_text, response, match_mode, cooldown
             FROM triggers 
             WHERE guild_id = %s
             ORDER BY trigger_id ASC
