@@ -21,13 +21,6 @@ class TriggersSystem(BaseDatabase):
         """)
         self.conn.commit()
 
-        # Migrate existing table if 'cooldown' column doesn't exist yet
-        try:
-            cursor.execute("ALTER TABLE triggers ADD COLUMN cooldown INT NOT NULL DEFAULT 0")
-            self.conn.commit()
-        except mysql.connector.Error:
-            pass  # Column already exists
-
         cursor.close()
 
     def add_trigger(
