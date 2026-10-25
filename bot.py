@@ -8,6 +8,7 @@ from cogs.channel import Channel
 from cogs.chess import ChessEvent
 from cogs.roles import Roles
 from cogs.mod_logs import ModLogs
+from cogs.uscite import Uscite
 import discord
 from discord.ext import commands, tasks
 from cogs.level import LevelCog
@@ -18,6 +19,7 @@ from config import DM_CATEGORY_ID
 from utils import roles_system
 from utils.bd_system import BirthdaySystem
 from utils.chess_db import ChessSystem
+from utils.uscite_system import UsciteSystem
 from utils.debug import Logger
 import os
 from utils.level_system import LevelSystem
@@ -95,6 +97,13 @@ triggers_system = TriggersSystem(
     database=database
 )
 
+uscite_system = UsciteSystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+
 initial_extensions = [
     "cogs.basic",
     "cogs.embed",
@@ -140,6 +149,8 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.mod_logs")
             await self.add_cog(Triggers(self, triggers_system))
             logger.info("Loaded extension: cogs.triggers")
+            await self.add_cog(Uscite(self, uscite_system))
+            logger.info("Loaded extension: cogs.uscite")
         except Exception as e:
             logger.error("Failed to load extension", exc_info=e)
 
