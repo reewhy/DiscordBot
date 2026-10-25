@@ -8,6 +8,8 @@ class UsciteSystem(BaseDatabase):
 
     def create_table(self):
         cursor = self.get_cursor()
+
+        # 1. Tabella delle proposte in attesa
         cursor.execute("""
                        CREATE TABLE IF NOT EXISTS proposte_uscite
                        (
@@ -64,6 +66,51 @@ class UsciteSystem(BaseDatabase):
                            ) DEFAULT CHARSET=utf8mb4
                        """)
 
+        # 2. Tabella delle uscite pubblicate (mancante nel codice originale)
+        cursor.execute("""
+                       CREATE TABLE IF NOT EXISTS uscite
+                       (
+                           id
+                           INT
+                           PRIMARY
+                           KEY
+                           AUTO_INCREMENT,
+                           guild_id
+                           BIGINT
+                           NOT
+                           NULL,
+                           thread_id
+                           BIGINT
+                           NOT
+                           NULL,
+                           poll_message_id
+                           BIGINT
+                           NOT
+                           NULL
+                           DEFAULT
+                           0,
+                           creator_id
+                           BIGINT
+                           NOT
+                           NULL,
+                           title
+                           VARCHAR
+                       (
+                           100
+                       ) NOT NULL,
+                           event_ts BIGINT NOT NULL,
+                           reminder_ts BIGINT NOT NULL,
+                           sent BOOLEAN NOT NULL DEFAULT FALSE,
+                           final_poll_message_id BIGINT NOT NULL DEFAULT 0,
+                           list_message_id BIGINT NOT NULL DEFAULT 0,
+                           UNIQUE KEY
+                       (
+                           thread_id
+                       )
+                           ) DEFAULT CHARSET=utf8mb4
+                       """)
+
+        # Manteniamo la logica di fallback per eventuali colonne aggiuntive future
         for col in (
                 "final_poll_message_id BIGINT NOT NULL DEFAULT 0",
                 "list_message_id BIGINT NOT NULL DEFAULT 0",
@@ -72,6 +119,7 @@ class UsciteSystem(BaseDatabase):
                 cursor.execute(f"ALTER TABLE uscite ADD COLUMN {col}")
             except Exception:
                 pass  # colonna già presente
+
         self.conn.commit()
         cursor.close()
 
