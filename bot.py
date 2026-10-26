@@ -275,7 +275,7 @@ class DiscordBot(commands.Bot):
                         )
 
                         await birthday_channel.send(
-                            content=f"<@&{config.FESTEGGIATO_ROLE_ID}> {member.mention}! 🎈",
+                            content=f"<@&{config.BIRTHDAY_ROLE_ID}> {member.mention}! 🎈",
                             embed=embed,
                             allowed_mentions=discord.AllowedMentions(roles=True, users=True),
                         )
