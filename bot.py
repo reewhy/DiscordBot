@@ -1,40 +1,39 @@
 import asyncio
-from dataclasses import dataclass
+import datetime as dt
+import json
+import os
+import re
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
+import discord
+from discord.ext import commands, tasks
+
+import config
 from cogs.basic import Basic
 from cogs.birthday import BirthdayCog
 from cogs.board import HallOfShameCog
 from cogs.channel import Channel
 from cogs.chess import ChessEvent
-from cogs.roles import Roles
-from cogs.mod_logs import ModLogs
-from cogs.uscite import Uscite
-import discord
-from discord.ext import commands, tasks
 from cogs.level import LevelCog
-import config
+from cogs.mod_logs import ModLogs
+from cogs.roles import Roles
 from cogs.triggers import Triggers
+from cogs.uscite import Uscite
 from config import GUILD_ID
 from config import DM_CATEGORY_ID
 from utils import roles_system
 from utils.bd_system import BirthdaySystem
+from utils.board_system import BoardSystem
 from utils.chess_db import ChessSystem
-from utils.uscite_system import UsciteSystem
 from utils.debug import Logger
-import os
-from utils.level_system import LevelSystem
 from utils.embed_factory import EmbedFactory
-import json
-import re
+from utils.level_system import LevelSystem
 from utils.roles_system import RoleSystem
 from utils.server_system import ServerSystem
-from utils.board_system import BoardSystem
 from utils.triggers_system import TriggersSystem
+from utils.uscite_system import UsciteSystem
 from views.ticket_view import TicketView, TicketControlView, CloseDMChannelView
-
-import discord.ext.tasks
-import datetime as dt
-from datetime import datetime, timezone
 
 # Initialize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
@@ -44,10 +43,22 @@ intents.message_content = True
 intents.voice_states = True
 intents.members = True
 
-host = "localhost"
-user = "root"
-password = "luca"
-database = "discordbot"
+# ---------------------------------------------------------------------------
+# Database credentials: read them from environment variables instead of
+# hardcoding them in the source. Set DB_PASSWORD before starting the bot
+# (e.g. `set DB_PASSWORD=...` on Windows, `export DB_PASSWORD=...` on Linux).
+# ---------------------------------------------------------------------------
+host = os.getenv("DB_HOST", "localhost")
+user = os.getenv("DB_USER", "root")
+password = os.getenv("DB_PASSWORD", "luca")
+database = os.getenv("DB_NAME", "discordbot")
+
+# Birthday settings
+BIRTHDAY_ROLE_ID = int(os.getenv("BIRTHDAY_ROLE_ID", "1549205110826082355"))
+TIMEZONE = ZoneInfo("Europe/Rome")
+BIRTHDAY_CHECK_TIME = dt.time(hour=9, minute=0, tzinfo=TIMEZONE)  # ogni giorno alle 09:00 (ora italiana)
+
+BIRTHDAY_ROLE_UPDATE_TIME = dt.time(hour=0, minute=0, tzinfo=TIMEZONE)  # ogni giorno a mezzanotte (ora italiana)
 
 server_system = ServerSystem(
     host=host,
@@ -120,6 +131,13 @@ with open('configs/blacklist.json') as f:
         blacklist.append(word)
 
 
+def unwrap(value):
+    """Se il DB restituisce una tupla/lista (es. (123,)), ritorna il primo elemento."""
+    if isinstance(value, (tuple, list)):
+        return value[0] if value else None
+    return value
+
+
 class DiscordBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=config.PREFIX, intents=intents)
@@ -166,6 +184,16 @@ class DiscordBot(commands.Bot):
         self.add_view(TicketControlView())
         self.add_view(CloseDMChannelView())  # Registra la view per renderla persistente
 
+        # Il task dei compleanni parte qui (una sola volta), non in on_ready,
+        # perché on_ready può essere chiamato più volte dopo una riconnessione.
+        if not self.check_birthday.is_running():
+            self.check_birthday.start()
+            logger.info(f"Birthday task started (runs daily at {BIRTHDAY_CHECK_TIME.strftime('%H:%M')} Europe/Rome)")
+
+        if not self.update_birthday_role.is_running():
+            self.update_birthday_role.start()
+            logger.info("Birthday role task started (runs daily at 00:00 Europe/Rome)")
+
     async def notify_role_change(self, member: discord.Member, role: discord.Role, action: str):
         """
         Sends a direct message to the user informing them of role addition or removal.
@@ -182,12 +210,13 @@ class DiscordBot(commands.Bot):
         except (discord.Forbidden, discord.HTTPException):
             logger.warning(f"Could not send role notification DM to {member.name} ({member.id}).")
 
-    @tasks.loop(hours=24)
+    # -------------------------------------------------------------------------
+    # COMPLEANNI
+    # -------------------------------------------------------------------------
+    @tasks.loop(time=BIRTHDAY_CHECK_TIME)
     async def check_birthday(self):
-        today = dt.date.today()
-        logger.info(f"Running debug birthday check for {today}")
-
-        bd_role_id = 1549205110826082355
+        today = dt.datetime.now(TIMEZONE).date()
+        logger.info(f"Running birthday check for {today}")
 
         try:
             rows = bd_system.get_birthdays(today)
@@ -195,21 +224,32 @@ class DiscordBot(commands.Bot):
                 logger.info("No birthdays found for today.")
                 return
 
+            logger.info(f"Found {len(rows)} birthday(s) for today.")
+
             for guild in self.guilds:
                 guild_id = guild.id
-                channel_id = server_system.get_birthday_channel(guild_id)
+                channel_id = unwrap(server_system.get_birthday_channel(guild_id))
                 if not channel_id:
+                    logger.warning(f"No birthday channel configured for guild {guild_id}.")
                     continue
 
-                birthday_channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+                try:
+                    birthday_channel = self.get_channel(int(channel_id)) or await self.fetch_channel(int(channel_id))
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                    logger.error(f"Cannot access birthday channel {channel_id} in guild {guild_id}: {e}")
+                    continue
+
                 if not birthday_channel:
                     continue
 
                 for row in rows:
-                    user_id = row[0]
+                    user_id = unwrap(row)
                     try:
-                        member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                        if not member:
+                        try:
+                            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+                        except discord.NotFound:
+                            # L'utente non è in questo server: salta senza errore
+                            logger.info(f"User {user_id} is not in guild {guild.name}, skipping.")
                             continue
 
                         embed = EmbedFactory.create_embed(
@@ -229,16 +269,84 @@ class DiscordBot(commands.Bot):
                         )
 
                         await birthday_channel.send(
-                            content=f"<@&{bd_role_id}> {member.mention}! 🎈",
+                            content=f"<@&{BIRTHDAY_ROLE_ID}> {member.mention}! 🎈",
                             embed=embed,
+                            allowed_mentions=discord.AllowedMentions(roles=True, users=True),
                         )
-                        logger.info(f"Sent debug birthday message for user {member.name} in guild {guild.name}")
+                        logger.info(f"Sent birthday message for user {member.name} in guild {guild.name}")
 
                     except discord.HTTPException as e:
                         logger.error(f"Failed to send birthday message for user {user_id}: {e}")
 
         except Exception as e:
             logger.error("Error occurred during check_birthday loop execution", exc_info=e)
+
+    @check_birthday.before_loop
+    async def before_check_birthday(self):
+        await self.wait_until_ready()
+
+    async def sync_birthday_role(self):
+        """
+        Allinea il ruolo "festeggiato" con i compleanni di oggi:
+        - lo toglie a chi lo ha ma non compie gli anni oggi
+        - lo assegna a chi compie gli anni oggi
+        """
+        today = dt.datetime.now(TIMEZONE).date()
+        rows = bd_system.get_birthdays(today)
+        birthday_ids = {int(unwrap(row)) for row in rows}
+        logger.info(f"Syncing birthday role for {today}: {len(birthday_ids)} birthday(s)")
+
+        for guild in self.guilds:
+            role = guild.get_role(FESTEGGIATO_ROLE_ID)
+            if not role:
+                continue  # il ruolo non esiste in questo server
+
+            # 1. Rimuovi il ruolo a chi non compie più gli anni oggi
+            for member in list(role.members):
+                if member.id not in birthday_ids:
+                    try:
+                        await member.remove_roles(role, reason="Compleanno terminato")
+                        logger.info(f"Removed festeggiato role from {member.name} in {guild.name}")
+                    except discord.HTTPException as e:
+                        logger.error(f"Failed to remove festeggiato role from {member.id}: {e}")
+
+            # 2. Assegna il ruolo a chi compie gli anni oggi
+            for user_id in birthday_ids:
+                try:
+                    member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+                except discord.NotFound:
+                    continue  # utente non presente in questo server
+                except discord.HTTPException as e:
+                    logger.error(f"Failed to fetch member {user_id}: {e}")
+                    continue
+
+                if role not in member.roles:
+                    try:
+                        await member.add_roles(role, reason="Oggi è il suo compleanno")
+                        logger.info(f"Added festeggiato role to {member.name} in {guild.name}")
+                    except discord.HTTPException as e:
+                        logger.error(f"Failed to add festeggiato role to {member.id}: {e}")
+
+    @tasks.loop(time=BIRTHDAY_ROLE_UPDATE_TIME)
+    async def update_birthday_role(self):
+        try:
+            await self.sync_birthday_role()
+        except Exception as e:
+            logger.error("Error occurred during update_birthday_role execution", exc_info=e)
+
+    @update_birthday_role.before_loop
+    async def before_update_birthday_role(self):
+        await self.wait_until_ready()
+        # Sincronizzazione iniziale: recupera eventuali ruoli rimasti se il bot era spento a mezzanotte
+        try:
+            await self.sync_birthday_role()
+        except Exception as e:
+            logger.error("Error during initial birthday role sync", exc_info=e)
+
+    @check_birthday.error
+    async def check_birthday_error(self, error):
+        # Evita che il task muoia silenziosamente in caso di eccezioni impreviste
+        logger.error("check_birthday task crashed", exc_info=error)
 
     async def on_ready(self):
         logger.info(f"We have logged in as {self.user.name} (ID: {self.user.id})")
@@ -256,7 +364,6 @@ class DiscordBot(commands.Bot):
             logger.info("Presence updated successfully")
 
             self.meme = self.get_channel(1516814162846810234)
-            self.check_birthday.start()
         except Exception as e:
             logger.error("Failed to update presence", exc_info=e)
 
