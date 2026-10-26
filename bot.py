@@ -528,42 +528,44 @@ class DiscordBot(commands.Bot):
         logger.info(f"New member joined: {member.name}")
 
         guild_id = member.guild.id
-        description = server_system.get_description(guild_id)
 
+        # 1. Recupera la descrizione e sistema sia il mention %u sia i vari \\n
+        description = server_system.get_description(guild_id)
+        if description:
+            description = description.replace("%u", member.mention).replace("\\n", "\n")
+        else:
+            description = ""
+
+        # 2. Assegnazione ruolo (Usiamo get_role prima di fetch_role per performance, fallendo su fetch se non in cache)
         try:
             role_id_data = server_system.get_role(guild_id)
             if role_id_data:
                 role_id = role_id_data[0]
-                role = await member.guild.fetch_role(role_id)
-                await member.add_roles(role)
+                role = member.guild.get_role(role_id) or await member.guild.fetch_role(role_id)
+                if role:
+                    await member.add_roles(role)
         except Exception as e:
             logger.warning(f"No role found or impossible to add: {e}")
+
+        # 3. Creazione Embed
+        avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
 
         embed = discord.Embed(
             colour=discord.Color.dark_gray(),
             title=f"{member.name} si è unito a {member.guild.name} 🎉",
-            description=description.replace("%u", f"{member.mention}")
+            description=description
         )
-
-        channels = server_system.get_channels(guild_id)
-        if channels:
-            for item in channels:
-                if isinstance(item, (tuple, list)) and len(item) == 2:
-                    channel_id, desc = item
-                    channel = self.get_channel(channel_id)
-                else:
-                    logger.warning(f"Unexpected data format in channels list: {item}")
-
-        avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
         embed.set_thumbnail(url=avatar_url)
 
+        # 4. Invio messaggio di benvenuto nel canale impostato
         channel_id = server_system.get_announce_channel(guild_id)
         if channel_id:
-            channel = self.get_channel(channel_id)
+            # Tenta prima dalla cache, poi con fetch_channel se il canale non è in memoria
+            channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
             if channel:
-                await channel.send(embed=embed, content=f"Welcome {member.mention}!")
+                await channel.send(content=f"Welcome {member.mention}!", embed=embed)
             else:
-                logger.error(f"Announce channel con ID {channel_id} non trovato in cache.")
+                logger.error(f"Announce channel con ID {channel_id} non trovato.")
         else:
             logger.warning(f"Nessun canale announce configurato per la gilda {guild_id}")
 
