@@ -212,12 +212,13 @@ class DiscordBot(commands.Bot):
     # -------------------------------------------------------------------------
     # COMPLEANNI
     # -------------------------------------------------------------------------
-    @tasks.loop(time=BIRTHDAY_CHECK_TIME)
-    async def check_birthday(self):
+    async def announce_birthdays(self):
+        """Invia gli auguri nel canale compleanni (una sola volta per utente al giorno)."""
         today = dt.datetime.now(TIMEZONE).date()
-        logger.info(f"Running birthday check for {today}")
+        logger.info(f"Running birthday announcements for {today}")
 
         try:
+            bd_system.cleanup_announcements(today)
             rows = bd_system.get_birthdays(today)
             if not rows:
                 logger.info("No birthdays found for today.")
@@ -242,7 +243,13 @@ class DiscordBot(commands.Bot):
                     continue
 
                 for row in rows:
-                    user_id = unwrap(row)
+                    user_id = int(unwrap(row))
+
+                    # Già annunciato oggi (es. dopo un riavvio del bot)? Salta.
+                    if bd_system.was_announced(guild_id, user_id, today):
+                        logger.info(f"Birthday of {user_id} already announced today in guild {guild.name}, skipping.")
+                        continue
+
                     try:
                         try:
                             member = guild.get_member(user_id) or await guild.fetch_member(user_id)
@@ -272,17 +279,28 @@ class DiscordBot(commands.Bot):
                             embed=embed,
                             allowed_mentions=discord.AllowedMentions(roles=True, users=True),
                         )
+                        bd_system.mark_announced(guild_id, user_id, today)
                         logger.info(f"Sent birthday message for user {member.name} in guild {guild.name}")
 
                     except discord.HTTPException as e:
                         logger.error(f"Failed to send birthday message for user {user_id}: {e}")
 
         except Exception as e:
-            logger.error("Error occurred during check_birthday loop execution", exc_info=e)
+            logger.error("Error occurred during announce_birthdays execution", exc_info=e)
+
+    @tasks.loop(time=BIRTHDAY_CHECK_TIME)
+    async def check_birthday(self):
+        await self.announce_birthdays()
 
     @check_birthday.before_loop
     async def before_check_birthday(self):
         await self.wait_until_ready()
+        # Catch-up: se il bot parte dopo l'orario di annuncio, manda subito gli auguri
+        # di oggi (il database evita i doppioni se il bot viene riavviato più volte).
+        now = dt.datetime.now(TIMEZONE)
+        if now.time() >= BIRTHDAY_CHECK_TIME.replace(tzinfo=None):
+            logger.info("Bot started after the announcement time, running catch-up announcements.")
+            await self.announce_birthdays()
 
     async def sync_birthday_role(self):
         """
