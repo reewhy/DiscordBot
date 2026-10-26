@@ -17,6 +17,8 @@ from config import (
     USCITE_ROLE_ID,
     USCITE_LISTA_CHANNEL_ID,
     USCITE_PROPOSTE_CHANNEL_ID,
+    EVENTI_ONLINE_ID,
+    EVENTI_ONLINE_ROLE_ID,
 )
 from utils.debug import Logger
 
@@ -25,6 +27,10 @@ logger = Logger(os.path.basename(__file__).replace(".py", ""))
 TZ = ZoneInfo("Europe/Rome")
 REMINDER_HOUR = 12          # ora (Italia) del giorno prima in cui parte il sondaggio finale
 MAX_POLL_HOURS = 768        # limite di Discord per la durata di un sondaggio (32 giorni)
+
+ANSWER_YES = "Sì"
+ANSWER_MAYBE = "Forse..."
+ANSWER_NO = "No"
 
 KAOMOJI = [
     "(ᵔᴥᵔ)", "(◕‿◕)", "ヽ(•‿•)ノ", "(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧", "(≧◡≦)", "٩(◕‿◕)۶", "(•◡•)",
@@ -61,11 +67,13 @@ def parse_event_dt(text: str) -> Optional[datetime]:
 
 
 def build_uscita_embeds(p: dict, creator: Optional[discord.abc.User], image_ref: Optional[str]) -> list[discord.Embed]:
-    """Gli embed del post: identici nella proposta e nel forum."""
+    """Gli embed del post: identici nella proposta e nella pubblicazione."""
+    online = p.get("kind") == "ONLINE"
+
     parts = [f"# {discord.utils.escape_markdown(p['kaomoji'])} {p['title']}"]
     if p["description"]:
         parts.append(p["description"])
-    parts.append(f"📍 **__punto di ritrovo__** : {p['place']}")
+    parts.append(f"{'💻 **__dove__**' if online else '📍 **__punto di ritrovo__**'} : {p['place']}")
     parts.append(f"📅 **__data__** : <t:{p['event_ts']}:D>")
     parts.append(f"🕑 **__orario__** : <t:{p['event_ts']}:t>")
 
@@ -76,7 +84,7 @@ def build_uscita_embeds(p: dict, creator: Optional[discord.abc.User], image_ref:
         embed.set_image(url=image_ref)
 
     embeds = [embed]
-    if p["reservation"]:
+    if p["reservation"] and not online:
         embeds.append(discord.Embed(description=PRENOTAZIONE_TEXT, color=discord.Color.red()))
     if p["warning"]:
         embeds.append(discord.Embed(description=f"# ⚠️ {p['warning']}", color=discord.Color.red()))
@@ -84,17 +92,21 @@ def build_uscita_embeds(p: dict, creator: Optional[discord.abc.User], image_ref:
 
 
 # =========================================================================
-# Modal: nuova proposta
+# Modal: nuova proposta / pubblicazione diretta
 # =========================================================================
 
 class UscitaModal(discord.ui.Modal, title="Nuova Uscita"):
-    def __init__(self, cog: "Uscite", event_title: str, warning: Optional[str], reservation: bool, direct: bool = False):
+    kind = "LIVE"
+
+    def __init__(self, cog: "Uscite", event_title: str, warning: Optional[str], reservation: bool,
+                 direct: bool = False, final_poll: bool = True):
         super().__init__()
         self.cog = cog
         self.event_title = event_title.strip()
         self.warning = (warning or "").strip()
         self.reservation = reservation
         self.direct = direct
+        self.final_poll = final_poll
 
         self.image_upload = discord.ui.FileUpload(required=False, min_values=0, max_values=1)
         self.add_item(discord.ui.Label(
@@ -135,7 +147,7 @@ class UscitaModal(discord.ui.Modal, title="Nuova Uscita"):
             )
             return
         if event_dt <= datetime.now(TZ):
-            await interaction.response.send_message("❌ La data dell'uscita è già passata.", ephemeral=True)
+            await interaction.response.send_message("❌ La data è già passata.", ephemeral=True)
             return
 
         attachment = self.image_upload.values[0] if self.image_upload.values else None
@@ -155,44 +167,37 @@ class UscitaModal(discord.ui.Modal, title="Nuova Uscita"):
             "event_ts": int(event_dt.timestamp()),
             "place": self.place.value.strip(),
             "description": self.description.value.strip(),
-            "image_url": "" if attachment else image_url,
+            "image_url": "" if attachment else image_url,   # se c'è il file, vince il file
             "has_file": attachment is not None,
             "reservation": self.reservation,
             "warning": self.warning,
             "kaomoji": random.choice(KAOMOJI),
             "creator_id": interaction.user.id,
+            "kind": self.kind,
+            "final_poll": self.final_poll,
         }
 
         # =================================================================
-        # FLUSSO DIRETTO (BYPASS APPROVAZIONE STAFF)
+        # FLUSSO DIRETTO (staff, senza approvazione)
         # =================================================================
         if self.direct:
             try:
-                # Se è stato allegato un file, creiamo un oggetto MockMessage con l'allegato
-                # in modo che publish_uscita possa estrarlo e ricaricarlo.
-                dummy_msg = interaction.message
-                if attachment:
-                    file = await attachment.to_file()
-                    # Inviamo temporaneamente l'allegato nel canale dell'uscita o usiamo il file per la pubblicazione
-                    # publish_uscita si aspetta proposal_message.attachments[0]
-                    dummy_msg = type("ProposalMsgMock", (), {"attachments": [attachment]})()
-
-                thread = await self.cog.publish_uscita(interaction.guild, p, dummy_msg)
-                logger.info(f"Uscita '{p['title']}' pubblicata direttamente dallo staff ({interaction.user.name})")
-                await interaction.followup.send(f"⚡ Uscita pubblicata direttamente: {thread.mention}", ephemeral=True)
+                thread = await self.cog.publish_uscita(interaction.guild, p, attachment)
+                logger.info(f"'{p['title']}' pubblicato direttamente dallo staff ({interaction.user.name})")
+                await interaction.followup.send(f"⚡ Pubblicato direttamente: {thread.mention}", ephemeral=True)
             except ValueError as e:
                 await interaction.followup.send(f"❌ {e}", ephemeral=True)
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "❌ Non ho i permessi per creare post/sondaggi nel forum delle uscite.", ephemeral=True
+                    "❌ Non ho i permessi per creare post/sondaggi nel canale di pubblicazione.", ephemeral=True
                 )
             except discord.HTTPException as e:
-                logger.error("Errore nella pubblicazione diretta dell'uscita", exc_info=e)
+                logger.error("Errore nella pubblicazione diretta", exc_info=e)
                 await interaction.followup.send(f"❌ Errore durante la pubblicazione: {e}", ephemeral=True)
             return
 
         # =================================================================
-        # FLUSSO STANDARD (PROPOSTA NEL FORUM)
+        # FLUSSO STANDARD (proposta nel forum)
         # =================================================================
         channel = interaction.guild.get_channel(USCITE_PROPOSTE_CHANNEL_ID)
         if not isinstance(channel, discord.ForumChannel):
@@ -225,12 +230,13 @@ class UscitaModal(discord.ui.Modal, title="Nuova Uscita"):
             )
             return
         except discord.HTTPException as e:
-            logger.error("Errore nell'invio della proposta uscita", exc_info=e)
+            logger.error("Errore nell'invio della proposta", exc_info=e)
             await interaction.followup.send(f"❌ Errore durante l'invio della proposta: {e}", ephemeral=True)
             return
 
         thread, msg = created.thread, created.message
 
+        # Aggiunge il proponente al post, così riceve le notifiche della discussione
         try:
             await thread.add_user(interaction.user)
         except discord.HTTPException:
@@ -249,8 +255,10 @@ class UscitaModal(discord.ui.Modal, title="Nuova Uscita"):
             reservation=p["reservation"],
             warning=p["warning"],
             kaomoji=p["kaomoji"],
+            kind=p["kind"],
+            final_poll=p["final_poll"],
         )
-        logger.info(f"Proposta uscita '{p['title']}' inviata da {interaction.user.name}")
+        logger.info(f"Proposta '{p['title']}' ({p['kind']}) inviata da {interaction.user.name}")
         await interaction.followup.send(
             f"✅ Proposta inviata: {thread.mention}. Lo staff la valuterà a breve.", ephemeral=True
         )
@@ -261,6 +269,16 @@ class UscitaModal(discord.ui.Modal, title="Nuova Uscita"):
             await interaction.followup.send("❌ Si è verificato un errore.", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Si è verificato un errore.", ephemeral=True)
+
+
+class EventoOnlineModal(UscitaModal, title="Nuovo Evento Online"):
+    kind = "ONLINE"
+
+    place = discord.ui.TextInput(
+        label="Dove (link, canale vocale...)",
+        placeholder="es. canale vocale #eventi, oppure link alla piattaforma",
+        max_length=300,
+    )
 
 
 # =========================================================================
@@ -280,7 +298,11 @@ class EditProposalModal(discord.ui.Modal, title="Modifica proposta"):
             min_length=16,
             max_length=16,
         )
-        self.f_place = discord.ui.TextInput(label="Punto di ritrovo", default=p["place"], max_length=300)
+        self.f_place = discord.ui.TextInput(
+            label="Dove (link, canale...)" if p.get("kind") == "ONLINE" else "Punto di ritrovo",
+            default=p["place"],
+            max_length=300,
+        )
         self.f_desc = discord.ui.TextInput(
             label="Descrizione",
             style=discord.TextStyle.paragraph,
@@ -334,7 +356,10 @@ class EditProposalModal(discord.ui.Modal, title="Modifica proposta"):
         content, embeds = await self.cog.build_proposal_payload(interaction.guild, p, filename)
 
         kwargs = {"attachments": []} if drop_file else {}
-        await interaction.response.edit_message(content=content, embeds=embeds, **kwargs)
+        # view=... aggiorna anche i pulsanti dei messaggi creati con versioni precedenti
+        await interaction.response.edit_message(
+            content=content, embeds=embeds, view=ProposalView(self.cog), **kwargs
+        )
 
         if isinstance(interaction.channel, discord.Thread):
             try:
@@ -368,7 +393,7 @@ class WarningModal(discord.ui.Modal, title="Avviso in evidenza"):
 
         filename = interaction.message.attachments[0].filename if interaction.message.attachments else None
         content, embeds = await self.cog.build_proposal_payload(interaction.guild, p, filename)
-        await interaction.response.edit_message(content=content, embeds=embeds)
+        await interaction.response.edit_message(content=content, embeds=embeds, view=ProposalView(self.cog))
 
 
 # =========================================================================
@@ -404,6 +429,12 @@ class ProposalView(discord.ui.View):
             except discord.HTTPException:
                 pass
 
+    async def _update_proposal(self, interaction: discord.Interaction, p: dict):
+        """Riscrive la proposta con i dati aggiornati e la view corrente."""
+        filename = interaction.message.attachments[0].filename if interaction.message.attachments else None
+        content, embeds = await self.cog.build_proposal_payload(interaction.guild, p, filename)
+        await interaction.response.edit_message(content=content, embeds=embeds, view=ProposalView(self.cog))
+
     @discord.ui.button(label="Approva", style=discord.ButtonStyle.success, emoji="✅",
                        custom_id="uscite:approve", row=0)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -412,18 +443,20 @@ class ProposalView(discord.ui.View):
             return
         await interaction.response.defer(ephemeral=True)
 
+        attachment = interaction.message.attachments[0] if interaction.message.attachments else None
+
         try:
-            thread = await self.cog.publish_uscita(interaction.guild, p, interaction.message)
+            thread = await self.cog.publish_uscita(interaction.guild, p, attachment)
         except ValueError as e:
             await interaction.followup.send(f"❌ {e}", ephemeral=True)
             return
         except discord.Forbidden:
             await interaction.followup.send(
-                "❌ Non ho i permessi per creare post/sondaggi nel forum delle uscite.", ephemeral=True
+                "❌ Non ho i permessi per creare post/sondaggi nel canale di pubblicazione.", ephemeral=True
             )
             return
         except discord.HTTPException as e:
-            logger.error("Errore nella pubblicazione dell'uscita", exc_info=e)
+            logger.error("Errore nella pubblicazione", exc_info=e)
             await interaction.followup.send(f"❌ Errore durante la pubblicazione: {e}", ephemeral=True)
             return
 
@@ -435,7 +468,7 @@ class ProposalView(discord.ui.View):
         )
         await self._archive(interaction)
         logger.info(f"Proposta {p['id']} approvata da {interaction.user.name}: {thread.name} ({thread.id})")
-        await interaction.followup.send(f"✅ Uscita pubblicata: {thread.mention}", ephemeral=True)
+        await interaction.followup.send(f"✅ Pubblicato: {thread.mention}", ephemeral=True)
 
         # Avvisa chi l'ha proposta (se ha i DM aperti)
         creator = await self.cog.get_creator(interaction.guild, p["creator_id"])
@@ -465,12 +498,31 @@ class ProposalView(discord.ui.View):
         p = await self._load(interaction)
         if not p:
             return
+        if p.get("kind") == "ONLINE":
+            await interaction.response.send_message(
+                "❌ La prenotazione non è disponibile per gli eventi online.", ephemeral=True
+            )
+            return
+
         p["reservation"] = not p["reservation"]
         self.cog.db.update_proposta(p["id"], reservation=p["reservation"])
+        await self._update_proposal(interaction, p)
 
-        filename = interaction.message.attachments[0].filename if interaction.message.attachments else None
-        content, embeds = await self.cog.build_proposal_payload(interaction.guild, p, filename)
-        await interaction.response.edit_message(content=content, embeds=embeds)
+    @discord.ui.button(label="Sondaggi sì/no", style=discord.ButtonStyle.secondary, emoji="📢",
+                       custom_id="uscite:final_poll", row=1)
+    async def final_poll_toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        p = await self._load(interaction)
+        if not p:
+            return
+        if p.get("kind") != "ONLINE":
+            await interaction.response.send_message(
+                "❌ I sondaggi si possono disattivare solo per gli eventi online.", ephemeral=True
+            )
+            return
+
+        p["final_poll"] = not p["final_poll"]
+        self.cog.db.update_proposta(p["id"], final_poll=p["final_poll"])
+        await self._update_proposal(interaction, p)
 
     @discord.ui.button(label="Rifiuta", style=discord.ButtonStyle.danger, emoji="✖️",
                        custom_id="uscite:reject", row=1)
@@ -484,6 +536,7 @@ class ProposalView(discord.ui.View):
             view=None,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        await self._archive(interaction)
         logger.info(f"Proposta {p['id']} rifiutata da {interaction.user.name}")
 
 
@@ -524,7 +577,6 @@ class Uscite(commands.Cog):
             avviso: Optional[app_commands.Range[str, 1, 200]] = None,
             diretto: bool = False,
     ):
-        # Se viene richiesto l'invio diretto, verifica che l'utente sia dello staff
         if diretto and not interaction.user.guild_permissions.manage_messages:
             await interaction.response.send_message(
                 "❌ Solo lo staff può pubblicare direttamente un'uscita senza approvazione.",
@@ -533,6 +585,34 @@ class Uscite(commands.Cog):
             return
 
         await interaction.response.send_modal(UscitaModal(self, titolo, avviso, prenotazione, direct=diretto))
+
+    @app_commands.command(name="evento_online",
+                          description="Proponi un evento online allo staff o pubblicalo direttamente.")
+    @app_commands.describe(
+        titolo="Titolo dell'evento.",
+        avviso="Avviso in evidenza (opzionale).",
+        sondaggio_conferma="Sondaggi e lista partecipanti? Se no, niente sondaggi né lista (default: sì)",
+        diretto="Bypassa l'approvazione e pubblica direttamente l'evento (solo Staff).",
+    )
+    @app_commands.guilds(*GUILD_ID)
+    async def evento_online(
+            self,
+            interaction: discord.Interaction,
+            titolo: app_commands.Range[str, 1, 100],
+            avviso: Optional[app_commands.Range[str, 1, 200]] = None,
+            sondaggio_conferma: bool = True,
+            diretto: bool = False,
+    ):
+        if diretto and not interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message(
+                "❌ Solo lo staff può pubblicare direttamente un evento senza approvazione.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(
+            EventoOnlineModal(self, titolo, avviso, False, direct=diretto, final_poll=sondaggio_conferma)
+        )
 
     @app_commands.command(name="kaomoji", description="Mostra tutte le kaomoji disponibili per i titoli delle uscite.")
     @app_commands.guilds(*GUILD_ID)
@@ -559,16 +639,17 @@ class Uscite(commands.Cog):
     @app_commands.guilds(*GUILD_ID)
     async def uscita_termina(self, interaction: discord.Interaction):
         thread = interaction.channel
-        if not isinstance(thread, discord.Thread) or thread.parent_id != USCITE_ID:
+        if not isinstance(thread, discord.Thread) or thread.parent_id not in (USCITE_ID, EVENTI_ONLINE_ID):
             await interaction.response.send_message(
-                "❌ Usa questo comando dentro il post di un'uscita.", ephemeral=True
+                "❌ Usa questo comando dentro il thread di un'uscita o di un evento.", ephemeral=True
             )
             return
 
         row = self.db.get_by_thread(thread.id)
         if not row:
             await interaction.response.send_message(
-                "❌ Questo post non risulta tra le uscite registrate.", ephemeral=True
+                "❌ Questo thread non ha sondaggi registrati (ad esempio un evento online senza sondaggi).",
+                ephemeral=True,
             )
             return
 
@@ -577,6 +658,7 @@ class Uscite(commands.Cog):
 
         try:
             if not sent:
+                # Il primo sondaggio può non esistere (uscita vicina): in quel caso `sent` è già True
                 poll_msg = await thread.fetch_message(poll_message_id)
                 if poll_msg.poll and not poll_msg.poll.is_finalised():
                     await poll_msg.poll.end()
@@ -597,12 +679,13 @@ class Uscite(commands.Cog):
                         break
 
                 if not target:
-                    await interaction.followup.send("❌ Non c'è nessun sondaggio attivo in questo post.", ephemeral=True)
+                    await interaction.followup.send("❌ Non c'è nessun sondaggio attivo in questo thread.",
+                                                    ephemeral=True)
                     return
 
                 await target.poll.end()
-                logger.info(f"Sondaggio di conferma {target.id} terminato da {interaction.user.name}")
-                await interaction.followup.send("✅ Sondaggio di conferma terminato.", ephemeral=True)
+                logger.info(f"Sondaggio {target.id} terminato da {interaction.user.name}")
+                await interaction.followup.send("✅ Sondaggio terminato.", ephemeral=True)
 
         except discord.NotFound:
             await interaction.followup.send("❌ Il messaggio del sondaggio non esiste più.", ephemeral=True)
@@ -639,22 +722,37 @@ class Uscite(commands.Cog):
         elif p["image_url"]:
             image_ref = p["image_url"]
 
+        online = p.get("kind") == "ONLINE"
         content = (
-            f"📝 **Proposta di uscita** di <@{p['creator_id']}> — in attesa di approvazione dello staff.\n"
-            f"-# Prenotazione: {'sì' if p['reservation'] else 'no'}"
+            f"📝 **Proposta di {'evento online' if online else 'uscita'}** di <@{p['creator_id']}> "
+            "— in attesa di approvazione dello staff."
         )
+        if online:
+            content += f"\n-# Sondaggi e lista partecipanti: {'sì' if p.get('final_poll', True) else 'no'}"
+        else:
+            content += f"\n-# Prenotazione: {'sì' if p['reservation'] else 'no'}"
         return content, build_uscita_embeds(p, creator, image_ref)
 
-    async def publish_uscita(self, guild: discord.Guild, p: dict, proposal_message: discord.Message) -> discord.Thread:
-        """Pubblica nel forum embed, sondaggio e lista. Solleva ValueError per errori da mostrare allo staff."""
+    async def publish_uscita(self, guild: discord.Guild, p: dict,
+                             attachment: Optional[discord.Attachment]) -> discord.Thread:
+        """Pubblica messaggio, sondaggio e lista. Solleva ValueError per errori da mostrare allo staff."""
         now = datetime.now(TZ)
         event_dt = datetime.fromtimestamp(p["event_ts"], TZ)
         if event_dt <= now:
-            raise ValueError("La data dell'uscita è già passata: modifica la proposta prima di approvarla.")
+            raise ValueError("La data è già passata: modifica la proposta prima di approvarla.")
 
-        channel = guild.get_channel(USCITE_ID)
+        online = p.get("kind") == "ONLINE"
+        channel_id = EVENTI_ONLINE_ID if online else USCITE_ID
+        role_id = EVENTI_ONLINE_ROLE_ID if online else USCITE_ROLE_ID
+
+        channel = guild.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
-            raise ValueError("Il canale delle uscite non è configurato correttamente.")
+            raise ValueError("Il canale di pubblicazione non è configurato correttamente.")
+
+        # I sondaggi e la lista si possono disattivare solo per gli eventi online
+        polls_enabled = bool(p.get("final_poll", True)) if online else True
+        logger.info(f"publish_uscita '{p['title']}': kind={p.get('kind')} final_poll={p.get('final_poll')} "
+                    f"-> sondaggi={polls_enabled}")
 
         # Le durate si calcolano ora, non quando la proposta è stata creata
         reminder_dt = (event_dt - timedelta(days=1)).replace(
@@ -664,11 +762,11 @@ class Uscite(commands.Cog):
         send_poll_first = poll_hours >= 1
         poll_hours = min(poll_hours, MAX_POLL_HOURS)
 
-        # Immagine: il file allegato alla proposta viene ricaricato nel forum
+        # Immagine: il file viene ricaricato nel canale di pubblicazione
         kwargs = {}
         image_ref = None
-        if p["has_file"] and proposal_message.attachments:
-            file = await proposal_message.attachments[0].to_file()
+        if p["has_file"] and attachment:
+            file = await attachment.to_file()
             kwargs["file"] = file
             image_ref = f"attachment://{file.filename}"
         elif p["image_url"]:
@@ -678,23 +776,29 @@ class Uscite(commands.Cog):
         embeds = build_uscita_embeds(p, creator, image_ref)
 
         main_msg = await channel.send(
-            content=f"<@&{USCITE_ROLE_ID}>",
+            content=f"<@&{role_id}>",
             embeds=embeds,
-            allowed_mentions=discord.AllowedMentions(roles=[discord.Object(id=USCITE_ROLE_ID)]),
+            allowed_mentions=discord.AllowedMentions(roles=[discord.Object(id=role_id)]),
             **kwargs,
         )
         thread = await main_msg.create_thread(name=p["title"][:100], auto_archive_duration=10080)
+
+        # Nessun sondaggio, nessuna lista, niente salvataggio: l'evento finisce qui
+        if not polls_enabled:
+            return thread
 
         poll_msg_id = 0
         final_poll_id = 0
         if send_poll_first:
             poll = discord.Poll(question="Ci sarai?", duration=timedelta(hours=poll_hours))
-            poll.add_answer(text="Sì", emoji="✅")
-            poll.add_answer(text="Forse...", emoji="🤔")
+            poll.add_answer(text=ANSWER_YES, emoji="✅")
+            poll.add_answer(text=ANSWER_MAYBE, emoji="🤔")
             poll_msg_id = (await thread.send(poll=poll)).id
         else:
-            # Uscita troppo vicina: direttamente il sondaggio di conferma
-            final_poll_id = await self.send_final_poll(thread.id, None, p["event_ts"], forced=True)
+            # Troppo vicino: direttamente il sondaggio di conferma
+            final_poll_id = await self.send_final_poll(
+                thread.id, None, p["event_ts"], forced=True, force_send=True
+            )
 
         list_id = await self.create_list_message(thread, p["title"])
 
@@ -709,6 +813,7 @@ class Uscite(commands.Cog):
             sent=not send_poll_first,
             final_poll_message_id=final_poll_id,
             list_message_id=list_id,
+            final_enabled=True,
         )
         return thread
 
@@ -735,15 +840,21 @@ class Uscite(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def send_final_poll(self, thread_id: int, poll_message_id: Optional[int], event_ts: int,
-                              forced: bool = False) -> int:
+                              forced: bool = False, force_send: bool = False) -> int:
+        # Rete di sicurezza: se la conferma è disattivata, non parte (salvo invio forzato da publish/mod)
+        if not forced and not force_send and not self.db.is_final_enabled(thread_id):
+            logger.info(f"Conferma disattivata per il thread {thread_id}: non inviata")
+            return 0
+
         thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
 
+        # Menziona solo chi ha votato "Forse..."
         voters: dict[int, discord.abc.User] = {}
         if poll_message_id:
             poll_msg = await thread.fetch_message(poll_message_id)
             if poll_msg.poll:
                 for answer in poll_msg.poll.answers:
-                    if answer.text != "Forse...":
+                    if answer.text != ANSWER_MAYBE:
                         continue
                     async for user in answer.voters():
                         if not user.bot:
@@ -754,12 +865,12 @@ class Uscite(commands.Cog):
         hours = math.floor((event_ts - time.time()) / 3600)
         hours = max(1, min(hours, MAX_POLL_HOURS))
         poll = discord.Poll(question="Confermi la tua presenza?", duration=timedelta(hours=hours))
-        poll.add_answer(text="Sì", emoji="✅")
-        poll.add_answer(text="No", emoji="❌")
+        poll.add_answer(text=ANSWER_YES, emoji="✅")
+        poll.add_answer(text=ANSWER_NO, emoji="❌")
 
         if forced:
             header = (
-                f"📢 **Sondaggio di conferma!** L'uscita è <t:{event_ts}:R> (<t:{event_ts}:F>)\n"
+                f"📢 **Sondaggio di conferma!** L'evento è <t:{event_ts}:R> (<t:{event_ts}:F>)\n"
                 "Confermate la vostra presenza:"
             )
         else:
@@ -815,7 +926,7 @@ class Uscite(commands.Cog):
             msg = await channel.send(embed=self.build_list_embed(title, thread.jump_url, []))
             return msg.id
         except (discord.HTTPException, AttributeError) as e:
-            logger.error("Impossibile creare il messaggio della lista uscita", exc_info=e)
+            logger.error("Impossibile creare il messaggio della lista", exc_info=e)
             return 0
 
     async def refresh_list(self, row):
@@ -838,8 +949,8 @@ class Uscite(commands.Cog):
                                 ids.add(user.id)
             return ids
 
-        yes = await voters_of(poll_id, "Sì") | await voters_of(final_id, "Sì")
-        yes -= await voters_of(final_id, "No")
+        yes = await voters_of(poll_id, ANSWER_YES) | await voters_of(final_id, ANSWER_YES)
+        yes -= await voters_of(final_id, ANSWER_NO)   # il "No" della conferma ha la precedenza
 
         names = []
         for uid in yes:
@@ -877,7 +988,7 @@ class Uscite(commands.Cog):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error("Errore nell'aggiornamento della lista uscita", exc_info=e)
+            logger.error("Errore nell'aggiornamento della lista", exc_info=e)
 
     @commands.Cog.listener()
     async def on_raw_poll_vote_add(self, payload: discord.RawPollVoteActionEvent):
