@@ -54,7 +54,6 @@ password = os.getenv("DB_PASSWORD", "luca")
 database = os.getenv("DB_NAME", "discordbot")
 
 # Birthday settings
-BIRTHDAY_ROLE_ID = int(os.getenv("BIRTHDAY_ROLE_ID", "1549205110826082355"))
 TIMEZONE = ZoneInfo("Europe/Rome")
 BIRTHDAY_CHECK_TIME = dt.time(hour=9, minute=0, tzinfo=TIMEZONE)  # ogni giorno alle 09:00 (ora italiana)
 
@@ -269,7 +268,7 @@ class DiscordBot(commands.Bot):
                         )
 
                         await birthday_channel.send(
-                            content=f"<@&{BIRTHDAY_ROLE_ID}> {member.mention}! 🎈",
+                            content=f"<@&{config.FESTEGGIATO_ROLE_ID}> {member.mention}! 🎈",
                             embed=embed,
                             allowed_mentions=discord.AllowedMentions(roles=True, users=True),
                         )
@@ -297,7 +296,7 @@ class DiscordBot(commands.Bot):
         logger.info(f"Syncing birthday role for {today}: {len(birthday_ids)} birthday(s)")
 
         for guild in self.guilds:
-            role = guild.get_role(FESTEGGIATO_ROLE_ID)
+            role = guild.get_role(config.FESTEGGIATO_ROLE_ID)
             if not role:
                 continue  # il ruolo non esiste in questo server
 
