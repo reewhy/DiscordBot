@@ -6,6 +6,9 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
+import io
+import re
+import aiohttp
 
 import discord
 from discord import app_commands
@@ -53,6 +56,9 @@ PRENOTAZIONE_TEXT = (
     "prima dell'uscita. Le persone che hanno votato \"sì\" al primo sondaggio sono libere di "
     "cambiare voto senza ricevere uno strike."
 )
+
+EVENT_DURATION_HOURS = 3
+CHANNEL_REF_RE = re.compile(r"discord(?:app)?\.com/channels/\d+/(\d+)|<#(\d+)>")
 
 
 # =========================================================================
@@ -733,6 +739,69 @@ class Uscite(commands.Cog):
             content += f"\n-# Prenotazione: {'sì' if p['reservation'] else 'no'}"
         return content, build_uscita_embeds(p, creator, image_ref)
 
+    @staticmethod
+    def find_voice_channel(guild: discord.Guild, text: str) -> Optional[discord.abc.GuildChannel]:
+        """Cerca nel testo un link (o una menzione) a un canale vocale/stage del server."""
+        for m in CHANNEL_REF_RE.finditer(text or ""):
+            channel = guild.get_channel(int(m.group(1) or m.group(2)))
+            if isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+                return channel
+        return None
+
+    @staticmethod
+    async def _download_image(url: str) -> Optional[bytes]:
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200 or not resp.content_type.startswith("image/"):
+                        return None
+                    data = await resp.content.read(8 * 1024 * 1024 + 1)
+                    return data if len(data) <= 8 * 1024 * 1024 else None
+        except Exception:
+            return None
+
+    async def create_discord_event(self, guild: discord.Guild, p: dict, thread: discord.Thread,
+                                   image_bytes: Optional[bytes]):
+        """Crea l'evento programmato di Discord. Non solleva mai: un errore qui non deve bloccare la pubblicazione."""
+        try:
+            start = datetime.fromtimestamp(p["event_ts"], TZ)
+            online = p.get("kind") == "ONLINE"
+
+            description = (p["description"] + "\n\n" if p["description"] else "") + f"💬 Discussione: {thread.jump_url}"
+            kwargs = dict(
+                name=p["title"][:100],
+                start_time=start,
+                end_time=start + timedelta(hours=EVENT_DURATION_HOURS),
+                description=description[:1000],
+                privacy_level=discord.PrivacyLevel.guild_only,
+                reason=f"Evento ufficializzato: {p['title']}",
+            )
+
+            voice = self.find_voice_channel(guild, p["place"]) if online else None
+            if voice:
+                kwargs["channel"] = voice          # tipo (voce/stage) dedotto dal canale
+            else:
+                kwargs["entity_type"] = discord.EntityType.external
+                kwargs["location"] = p["place"][:100]
+
+            if image_bytes is None and p["image_url"]:
+                image_bytes = await self._download_image(p["image_url"])
+
+            try:
+                event = await guild.create_scheduled_event(**kwargs, **({"image": image_bytes} if image_bytes else {}))
+            except discord.HTTPException:
+                if not image_bytes:
+                    raise
+                event = await guild.create_scheduled_event(**kwargs)   # riprova senza immagine
+
+            logger.info(f"Evento Discord creato per '{p['title']}': {event.url} "
+                        f"({'vocale: ' + voice.name if voice else 'esterno'})")
+        except discord.Forbidden:
+            logger.error("Mi manca il permesso 'Gestisci eventi' per creare l'evento Discord")
+        except Exception as e:
+            logger.error(f"Impossibile creare l'evento Discord per '{p['title']}'", exc_info=e)
+
     async def publish_uscita(self, guild: discord.Guild, p: dict,
                              attachment: Optional[discord.Attachment]) -> discord.Thread:
         """Pubblica messaggio, sondaggio e lista. Solleva ValueError per errori da mostrare allo staff."""
@@ -765,8 +834,10 @@ class Uscite(commands.Cog):
         # Immagine: il file viene ricaricato nel canale di pubblicazione
         kwargs = {}
         image_ref = None
+        image_bytes = None
         if p["has_file"] and attachment:
-            file = await attachment.to_file()
+            image_bytes = await attachment.read()
+            file = discord.File(io.BytesIO(image_bytes), filename=attachment.filename)
             kwargs["file"] = file
             image_ref = f"attachment://{file.filename}"
         elif p["image_url"]:
@@ -815,6 +886,10 @@ class Uscite(commands.Cog):
             list_message_id=list_id,
             final_enabled=True,
         )
+        thread = await main_msg.create_thread(name=p["title"][:100], auto_archive_duration=10080)
+
+        await self.create_discord_event(guild, p, thread, image_bytes)
+
         return thread
 
     # ---------------------------------------------------------------------
