@@ -552,6 +552,8 @@ class DiscordBot(commands.Bot):
 
         await self.process_commands(message)
 
+
+
     async def on_member_join(self, member: discord.Member):
         logger.info(f"New member joined: {member.name}")
 

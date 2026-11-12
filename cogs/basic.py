@@ -320,6 +320,17 @@ class Basic(commands.Cog):
         x = random.randint(minimum, maximum)
         await interaction.response.send_message(f"🎲 You rolled a **{x}**!")
 
+    @commands.command(name="resync")
+    @commands.has_permissions(administrator=True)
+    async def resync(self, ctx):
+        try:
+            for g_id in GUILD_ID:
+                synced = await self.tree.sync(guild=discord.Object(id=g_id))
+                await ctx.send(f"Sync guild {g_id}: {len(synced)} comandi.")
+        except Exception as e:
+            logger.error("Manual sync failed", exc_info=e)
+            await ctx.send(f"❌ Errore: `{e}`")
+
     @app_commands.command(name="embed", description="Apre l'Embed Builder avanzato con anteprima interattiva.")
     @app_commands.describe(channel="Canale in cui inviare l'embed finale (default: canale corrente).")
     @app_commands.checks.has_permissions(manage_messages=True)
