@@ -908,6 +908,13 @@ class Uscite(commands.Cog):
                     final_poll_message_id=final.id if final else 0,
                     list_message_id=0,
                     final_enabled=False,
+                    kind="LIVE",
+                    channel_id=channel.id,
+                    description=text[:4000],
+                    place="",
+                    image_url=next((e.image.url for e in msg.embeds if e.image), "")
+                              or (msg.attachments[0].url if msg.attachments else ""),
+                    created_ts=int(msg.created_at.timestamp()),
                 )
 
             when = datetime.fromtimestamp(event_ts, TZ).strftime("%d/%m/%Y %H:%M")
@@ -1042,10 +1049,13 @@ class Uscite(commands.Cog):
 
             logger.info(f"Evento Discord creato per '{p['title']}': {event.url} "
                         f"({'vocale: ' + voice.name if voice else 'esterno'})")
+            return event.id
         except discord.Forbidden:
             logger.error("Mi manca il permesso 'Gestisci eventi' per creare l'evento Discord")
         except Exception as e:
             logger.error(f"Impossibile creare l'evento Discord per '{p['title']}'", exc_info=e)
+        return None
+
 
     async def publish_uscita(self, guild: discord.Guild, p: dict,
                              attachment: Optional[discord.Attachment]) -> discord.Thread:
@@ -1100,30 +1110,31 @@ class Uscite(commands.Cog):
         # Il thread di discussione nasce dal messaggio principale (stesso ID del messaggio)
         thread = await main_msg.create_thread(name=p["title"][:100], auto_archive_duration=10080)
 
-        # Nessun sondaggio, nessuna lista, niente salvataggio: l'evento finisce qui
-        if not polls_enabled:
-            return thread
+        # Evento programmato di Discord (creato per tutti, anche senza sondaggi)
+        discord_event_id = await self.create_discord_event(guild, p, thread, image_bytes) or 0
+
+        # URL stabile dell'immagine: link originale, oppure l'allegato caricato nel post
+        saved_image_url = p["image_url"] or (main_msg.attachments[0].url if main_msg.attachments else "")
 
         poll_msg_id = 0
         final_poll_id = 0
-        if send_poll_first:
-            poll = discord.Poll(question="Ci sarai?", duration=timedelta(hours=poll_hours))
-            poll.add_answer(text=ANSWER_YES, emoji="✅")
-            poll.add_answer(text=ANSWER_MAYBE, emoji="🤔")
-            # Nel canale delle uscite, come risposta al messaggio principale
-            poll_msg = await channel.send(
-                poll=poll,
-                reference=main_msg.to_reference(fail_if_not_found=False),
-                mention_author=False,
-            )
-            poll_msg_id = poll_msg.id
-        else:
-            # Troppo vicino: direttamente il sondaggio di conferma
-            final_poll_id = await self.send_final_poll(
-                thread.id, None, p["event_ts"], forced=True, force_send=True
-            )
-
-        list_id = await self.create_list_message(thread, p["title"])
+        list_id = 0
+        if polls_enabled:
+            if send_poll_first:
+                poll = discord.Poll(question="Ci sarai?", duration=timedelta(hours=poll_hours))
+                poll.add_answer(text=ANSWER_YES, emoji="✅")
+                poll.add_answer(text=ANSWER_MAYBE, emoji="🤔")
+                poll_msg = await channel.send(
+                    poll=poll,
+                    reference=main_msg.to_reference(fail_if_not_found=False),
+                    mention_author=False,
+                )
+                poll_msg_id = poll_msg.id
+            else:
+                final_poll_id = await self.send_final_poll(
+                    thread.id, None, p["event_ts"], forced=True, force_send=True
+                )
+            list_id = await self.create_list_message(thread, p["title"])
 
         self.db.add_uscita(
             guild_id=guild.id,
@@ -1133,13 +1144,21 @@ class Uscite(commands.Cog):
             title=p["title"],
             event_ts=p["event_ts"],
             reminder_ts=int(reminder_dt.timestamp()),
-            sent=not send_poll_first,
+            sent=(not send_poll_first) or (not polls_enabled),
             final_poll_message_id=final_poll_id,
             list_message_id=list_id,
-            final_enabled=True,
+            final_enabled=polls_enabled,
+            kind=p.get("kind", "LIVE"),
+            channel_id=channel.id,
+            description=p["description"],
+            place=p["place"],
+            image_url=saved_image_url,
+            reservation=p["reservation"] and not online,
+            warning=p["warning"],
+            kaomoji=p["kaomoji"],
+            discord_event_id=discord_event_id,
+            created_ts=int(time.time()),
         )
-
-        await self.create_discord_event(guild, p, thread, image_bytes)
 
         return thread
 
