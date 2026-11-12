@@ -60,6 +60,77 @@ PRENOTAZIONE_TEXT = (
 EVENT_DURATION_HOURS = 3
 CHANNEL_REF_RE = re.compile(r"discord(?:app)?\.com/channels/\d+/(\d+)|<#(\d+)>")
 
+# --- Import delle uscite vecchie (postate a mano) ---
+MESI = {
+    "gennaio": 1, "febbraio": 2, "marzo": 3, "aprile": 4, "maggio": 5, "giugno": 6,
+    "luglio": 7, "agosto": 8, "settembre": 9, "ottobre": 10, "novembre": 11, "dicembre": 12,
+}
+TS_TAG_RE = re.compile(r"<t:(\d{9,11})(?::[a-zA-Z])?>")
+DATE_NUM_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
+DATE_TXT_RE = re.compile(r"\b(\d{1,2})\s+(" + "|".join(MESI) + r")(?:\s+(\d{4}))?\b", re.I)
+TIME_COLON_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+TIME_WORD_RE = re.compile(r"\b(?:alle(?:\s+ore)?|ore)\s+(\d{1,2})(?:[.:](\d{2}))?\b", re.I)
+
+
+def parse_old_event_ts(text: str, posted: datetime) -> Optional[tuple[int, bool]]:
+    """Cerca data e ora nel testo di un'uscita vecchia. Ritorna (timestamp, ora_trovata) oppure None."""
+    m = TS_TAG_RE.search(text)
+    if m:
+        return int(m.group(1)), True
+
+    day = month = year = None
+    m = DATE_NUM_RE.search(text)
+    if m:
+        day, month = int(m.group(1)), int(m.group(2))
+        year = int(m.group(3)) if m.group(3) else None
+    else:
+        m = DATE_TXT_RE.search(text)
+        if m:
+            day, month = int(m.group(1)), MESI[m.group(2).lower()]
+            year = int(m.group(3)) if m.group(3) else None
+    if day is None:
+        return None
+    if year is not None and year < 100:
+        year += 2000
+
+    hour = minute = 0
+    found_time = False
+    for regex in (TIME_COLON_RE, TIME_WORD_RE):
+        for tm in regex.finditer(text):
+            h, mi = int(tm.group(1)), int(tm.group(2) or 0)
+            if h < 24 and mi < 60:
+                hour, minute, found_time = h, mi, True
+                break
+        if found_time:
+            break
+
+    posted_local = posted.astimezone(TZ)
+    try:
+        if year is None:
+            # Senza anno: quello del messaggio (o il successivo, se la data risulterebbe molto prima)
+            dt = datetime(posted_local.year, month, day, hour, minute, tzinfo=TZ)
+            if dt < posted_local - timedelta(days=30):
+                dt = dt.replace(year=dt.year + 1)
+        else:
+            dt = datetime(year, month, day, hour, minute, tzinfo=TZ)
+    except ValueError:
+        return None
+    return int(dt.timestamp()), found_time
+
+
+def guess_old_title(msg: discord.Message, thread: Optional[discord.Thread], text: str) -> str:
+    """Titolo: titolo dell'embed, altrimenti nome del thread, altrimenti la prima riga utile del messaggio."""
+    raw = next((e.title for e in msg.embeds if e.title), None) or (thread.name if thread else None)
+    if not raw:
+        for line in text.splitlines():
+            line = re.sub(r"<[@#&!]+\d+>|<t:\d+(?::[a-zA-Z])?>", "", line)
+            line = re.sub(r"^[\W_]+|[\W_]+$", "", line)
+            if line:
+                raw = line
+                break
+    raw = re.sub(r"\s+", " ", raw or "").strip()
+    return (raw or "Uscita senza titolo")[:100]
+
 
 # =========================================================================
 # Utility
@@ -717,6 +788,168 @@ class Uscite(commands.Cog):
             await interaction.response.send_message("❌ Non hai i permessi per usare questo comando.", ephemeral=True)
         else:
             logger.error("Errore in /uscita_termina", exc_info=error)
+
+    # ---------------------------------------------------------------------
+    # Import delle uscite vecchie
+    # ---------------------------------------------------------------------
+
+    @staticmethod
+    def _message_text(msg: discord.Message) -> str:
+        parts = [msg.content or ""]
+        for e in msg.embeds:
+            parts += [e.title or "", e.description or ""]
+            parts += [f"{f.name} {f.value}" for f in e.fields]
+        if msg.poll:
+            parts.append(str(msg.poll.question))
+        return "\n".join(x for x in parts if x)
+
+    @app_commands.command(
+        name="importa_uscite",
+        description="Importa nel database le uscite vecchie postate a mano nel canale (solo mod).",
+    )
+    @app_commands.describe(
+        fino_al="Ultimo giorno da importare, GG/MM/AAAA (default: 25/10/2026).",
+        salva="Se no, mostra solo l'anteprima senza scrivere nel database (default: no).",
+    )
+    @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def importa_uscite(self, interaction: discord.Interaction, fino_al: str = "25/10/2026",
+                             salva: bool = False):
+        try:
+            last_day = datetime.strptime(fino_al.strip(), "%d/%m/%Y")
+        except ValueError:
+            await interaction.response.send_message("❌ Data non valida. Usa `GG/MM/AAAA`.", ephemeral=True)
+            return
+        cutoff = (last_day + timedelta(days=1)).replace(tzinfo=TZ)
+
+        channel = interaction.guild.get_channel(USCITE_ID)
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message("❌ Il canale delle uscite non è configurato.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            messages = [m async for m in channel.history(limit=None, before=cutoff, oldest_first=True)]
+        except discord.HTTPException as e:
+            logger.error("Errore nella lettura della cronologia", exc_info=e)
+            await interaction.followup.send(f"❌ Non riesco a leggere il canale: {e}", ephemeral=True)
+            return
+
+        # Sondaggi postati nel canale come risposta a un messaggio: li collego all'uscita
+        polls_by_ref: dict[int, list[discord.Message]] = {}
+        for m in messages:
+            if m.poll and m.reference and m.reference.message_id:
+                polls_by_ref.setdefault(m.reference.message_id, []).append(m)
+
+        found: list[tuple[int, str]] = []     # (event_ts, riga del report)
+        missing: list[str] = []
+        existing = ignored = 0
+
+        for msg in messages:
+            # Salto risposte, messaggi di sistema e i messaggi del bot (già registrati o sondaggi/conferme)
+            if msg.author.id == self.bot.user.id or msg.reference or msg.type != discord.MessageType.default:
+                continue
+
+            text = self._message_text(msg)
+            parsed = parse_old_event_ts(text, msg.created_at)
+            role_ping = any(r.id == USCITE_ROLE_ID for r in msg.role_mentions)
+            strong = msg.flags.has_thread or bool(msg.embeds) or role_ping
+            if not (strong or (msg.poll and parsed)):
+                ignored += 1          # chiacchiere o altro che non sembra un'uscita
+                continue
+
+            # Il thread ha lo stesso ID del messaggio: se c'è già, l'uscita è registrata
+            if self.db.get_by_thread(msg.id):
+                existing += 1
+                continue
+
+            if not parsed:
+                snippet = re.sub(r"\s+", " ", text)[:60]
+                missing.append(f"⚠️ {msg.jump_url} — data non trovata: {snippet}")
+                continue
+            event_ts, has_time = parsed
+
+            thread = msg.thread
+            if thread is None and msg.flags.has_thread:
+                try:
+                    thread = interaction.guild.get_thread(msg.id) or await self.bot.fetch_channel(msg.id)
+                except discord.HTTPException:
+                    thread = None
+
+            polls = list(polls_by_ref.get(msg.id, []))
+            if msg.poll:
+                polls.append(msg)
+            if thread:
+                try:
+                    async for tm in thread.history(limit=200, oldest_first=True):
+                        if tm.poll:
+                            polls.append(tm)
+                except discord.HTTPException:
+                    pass
+            polls.sort(key=lambda x: x.id)
+
+            final = next((x for x in reversed(polls) if "conferm" in str(x.poll.question).lower()), None)
+            rest = [x for x in polls if x is not final]
+            first = rest[0] if rest else None
+
+            title = guess_old_title(msg, thread, text)
+
+            if salva:
+                self.db.add_uscita(
+                    guild_id=interaction.guild.id,
+                    thread_id=msg.id,
+                    poll_message_id=first.id if first else 0,
+                    creator_id=msg.author.id,
+                    title=title,
+                    event_ts=event_ts,
+                    reminder_ts=event_ts,
+                    sent=True,                     # niente sondaggio di conferma automatico
+                    final_poll_message_id=final.id if final else 0,
+                    list_message_id=0,
+                    final_enabled=False,
+                )
+
+            when = datetime.fromtimestamp(event_ts, TZ).strftime("%d/%m/%Y %H:%M")
+            line = (
+                f"✅ {when}{'' if has_time else ' (ora non trovata)'} — {title} — "
+                f"sondaggi: {'sì' if first else 'no'}/{'sì' if final else 'no'} — {msg.jump_url}"
+            )
+            found.append((event_ts, line))
+
+        found.sort(key=lambda x: x[0])
+        header = (
+            f"{'IMPORTATE' if salva else 'ANTEPRIMA (nulla è stato salvato)'}: {len(found)} uscite\n"
+            f"Già presenti nel database: {existing}\n"
+            f"Senza data riconosciuta: {len(missing)}\n"
+            f"Messaggi ignorati (non sembrano uscite): {ignored}\n"
+            f"Fino al: {fino_al}\n\n"
+        )
+        report = header + "\n".join(line for _, line in found)
+        if missing:
+            report += "\n\n" + "\n".join(missing)
+
+        logger.info(f"importa_uscite da {interaction.user.name}: salva={salva} importate={len(found)} "
+                    f"esistenti={existing} senza_data={len(missing)} ignorati={ignored}")
+
+        summary = (
+            f"{'✅ Importate' if salva else '👀 Anteprima:'} **{len(found)}** uscite "
+            f"(già presenti: {existing}, senza data: {len(missing)}, ignorati: {ignored})."
+        )
+        if not salva and found:
+            summary += "\nControlla il report e rilancia con `salva: True` per scrivere nel database."
+        await interaction.followup.send(
+            summary,
+            file=discord.File(io.BytesIO(report.encode("utf-8")), filename="importa_uscite.txt"),
+            ephemeral=True,
+        )
+
+    @importa_uscite.error
+    async def importa_uscite_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("❌ Non hai i permessi per usare questo comando.", ephemeral=True)
+        else:
+            logger.error("Errore in /importa_uscite", exc_info=error)
 
     # ---------------------------------------------------------------------
     # Proposte e pubblicazione
