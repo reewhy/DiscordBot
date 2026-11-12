@@ -60,16 +60,36 @@ PRENOTAZIONE_TEXT = (
 EVENT_DURATION_HOURS = 3
 CHANNEL_REF_RE = re.compile(r"discord(?:app)?\.com/channels/\d+/(\d+)|<#(\d+)>")
 
-# --- Import delle uscite vecchie (postate a mano) ---
 MESI = {
     "gennaio": 1, "febbraio": 2, "marzo": 3, "aprile": 4, "maggio": 5, "giugno": 6,
     "luglio": 7, "agosto": 8, "settembre": 9, "ottobre": 10, "novembre": 11, "dicembre": 12,
 }
+MD_RE = re.compile(r"[*_~`|]")                      # simboli del Markdown, tolti prima di cercare date e ore
 TS_TAG_RE = re.compile(r"<t:(\d{9,11})(?::[a-zA-Z])?>")
-DATE_NUM_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
+DATE_FULL_RE = re.compile(r"(?<![\d.:/])(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})(?!\d)")   # 22/10/2026, 22.10.26
+DATE_SHORT_RE = re.compile(r"(?<![\d.:/])(\d{1,2})/(\d{1,2})(?![\d/])")                    # 22/10
 DATE_TXT_RE = re.compile(r"\b(\d{1,2})\s+(" + "|".join(MESI) + r")(?:\s+(\d{4}))?\b", re.I)
+TIME_LABEL_RE = re.compile(r"orario[\W_]*(\d{1,2})(?:\s*[.:h]\s*(\d{2}))?", re.I)          # "orario : 18.30"
 TIME_COLON_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
-TIME_WORD_RE = re.compile(r"\b(?:alle(?:\s+ore)?|ore)\s+(\d{1,2})(?:[.:](\d{2}))?\b", re.I)
+TIME_WORD_RE = re.compile(r"\b(?:alle(?:\s+ore)?|ore)\s+(\d{1,2})(?:[.:h](\d{2}))?\b", re.I)
+PLACE_RE = re.compile(r"(?:punto di ritrovo|dove)\s*:\s*(.+)", re.I)
+LABEL_RE = re.compile(r"^\W*(?:data|orario|ora)\s*:", re.I)                              # righe "data : ..." / "orario : ..."
+FOOTER_RE = re.compile(r"Organizzata da (.+)$")
+
+
+def _find_date(text: str) -> Optional[tuple[int, int, Optional[int]]]:
+    for m in DATE_FULL_RE.finditer(text):
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= d <= 31 and 1 <= mo <= 12:
+            return d, mo, y
+    m = DATE_TXT_RE.search(text)
+    if m:
+        return int(m.group(1)), MESI[m.group(2).lower()], int(m.group(3)) if m.group(3) else None
+    for m in DATE_SHORT_RE.finditer(text):
+        d, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= d <= 31 and 1 <= mo <= 12:
+            return d, mo, None
+    return None
 
 
 def parse_old_event_ts(text: str, posted: datetime) -> Optional[tuple[int, bool]]:
@@ -78,24 +98,17 @@ def parse_old_event_ts(text: str, posted: datetime) -> Optional[tuple[int, bool]
     if m:
         return int(m.group(1)), True
 
-    day = month = year = None
-    m = DATE_NUM_RE.search(text)
-    if m:
-        day, month = int(m.group(1)), int(m.group(2))
-        year = int(m.group(3)) if m.group(3) else None
-    else:
-        m = DATE_TXT_RE.search(text)
-        if m:
-            day, month = int(m.group(1)), MESI[m.group(2).lower()]
-            year = int(m.group(3)) if m.group(3) else None
-    if day is None:
+    text = MD_RE.sub("", text)      # "**GIOVEDI' 22**.10.26" -> "GIOVEDI' 22.10.26"
+    date = _find_date(text)
+    if not date:
         return None
+    day, month, year = date
     if year is not None and year < 100:
         year += 2000
 
     hour = minute = 0
     found_time = False
-    for regex in (TIME_COLON_RE, TIME_WORD_RE):
+    for regex in (TIME_LABEL_RE, TIME_COLON_RE, TIME_WORD_RE):
         for tm in regex.finditer(text):
             h, mi = int(tm.group(1)), int(tm.group(2) or 0)
             if h < 24 and mi < 60:
@@ -130,6 +143,88 @@ def guess_old_title(msg: discord.Message, thread: Optional[discord.Thread], text
                 break
     raw = re.sub(r"\s+", " ", raw or "").strip()
     return (raw or "Uscita senza titolo")[:100]
+
+
+def split_kaomoji(text: str) -> tuple[str, str]:
+    """Separa '<kaomoji> Titolo' in (titolo, kaomoji)."""
+    text = re.sub(r"\\([^\w\s])", r"\1", text)        # toglie l'escape del Markdown (\* \_ ...)
+    for k in sorted(KAOMOJI, key=len, reverse=True):
+        if text.startswith(k):
+            return text[len(k):].strip(), k
+    # kaomoji non in lista: sono i primi "pezzi" senza nessuna lettera o cifra
+    tokens = text.split()
+    i = 0
+    while i < len(tokens) and not re.search(r"[A-Za-zÀ-ÿ0-9]", tokens[i]):
+        i += 1
+    return " ".join(tokens[i:]).strip(), " ".join(tokens[:i])
+
+
+def parse_old_event_fields(msg: discord.Message, thread: Optional[discord.Thread]) -> dict:
+    """Estrae titolo, kaomoji, descrizione, luogo, immagine, prenotazione e avviso da un post nel formato del bot:
+
+        # <kaomoji> Titolo
+        descrizione...
+        📍 punto di ritrovo : ...
+        🕑 orario : 18.30
+    """
+    main = msg.embeds[0] if msg.embeds else None
+    source = (main.description or "") if main else (msg.content or "")
+    source = re.sub(r"<@&\d+>", "", source)
+
+    title = kaomoji = place = ""
+    desc: list[str] = []
+    for raw in source.splitlines():
+        line = raw.strip()
+        clean = MD_RE.sub("", line)
+        if not title and line.startswith("# "):
+            title, kaomoji = split_kaomoji(line[2:].strip())
+            continue
+        m = PLACE_RE.search(clean)
+        if m and not place:
+            place = m.group(1).strip()
+            continue
+        if LABEL_RE.match(clean):
+            continue
+        desc.append(line)
+
+    if not title:
+        title = guess_old_title(msg, thread, source)
+    description = re.sub(r"\n{3,}", "\n\n", "\n".join(desc)).strip()
+
+    image_url = next((e.image.url for e in msg.embeds if e.image and e.image.url), "")
+    if not image_url:
+        image_url = next((a.url for a in msg.attachments if (a.content_type or "").startswith("image/")), "")
+
+    # Box rossi successivi: prenotazione e avviso in evidenza
+    reservation, warning = False, ""
+    for e in msg.embeds[1:]:
+        d = e.description or ""
+        if "USCITA CON PRENOTAZIONE" in d:
+            reservation = True
+        elif d.startswith("# ⚠️"):
+            warning = d[len("# ⚠️"):].strip()[:200]
+
+    return {
+        "title": title[:100],
+        "kaomoji": kaomoji[:64],
+        "description": description[:4000],
+        "place": place[:300],
+        "image_url": image_url[:1000],
+        "reservation": reservation,
+        "warning": warning,
+    }
+
+
+def creator_from_footer(guild: discord.Guild, msg: discord.Message) -> Optional[int]:
+    """Il footer degli embed è 'Organizzata da <nome>': prova a ritrovare il membro."""
+    for e in msg.embeds:
+        if e.footer and e.footer.text:
+            m = FOOTER_RE.match(e.footer.text)
+            if m:
+                member = discord.utils.find(lambda x: x.display_name == m.group(1), guild.members)
+                if member:
+                    return member.id
+    return None
 
 
 # =========================================================================
@@ -356,6 +451,78 @@ class EventoOnlineModal(UscitaModal, title="Nuovo Evento Online"):
         placeholder="es. canale vocale #eventi, oppure link alla piattaforma",
         max_length=300,
     )
+
+class CompletaUscitaModal(discord.ui.Modal, title="Completa uscita"):
+    def __init__(self, cog: "Uscite", row: dict, extra: dict):
+        super().__init__()
+        self.cog = cog
+        self.row = row
+        self.extra = extra          # prenotazione / avviso / tipo / organizzatore passati dal comando
+
+        self.f_title = discord.ui.TextInput(label="Titolo", default=row["title"], max_length=100)
+        self.f_when = discord.ui.TextInput(
+            label="Data e ora (GG/MM/AAAA HH:MM)",
+            default=datetime.fromtimestamp(row["event_ts"], TZ).strftime("%d/%m/%Y %H:%M"),
+            min_length=16,
+            max_length=16,
+        )
+        self.f_place = discord.ui.TextInput(
+            label="Punto di ritrovo / dove",
+            default=row["place"] or None,
+            max_length=300,
+            required=False,
+        )
+        self.f_desc = discord.ui.TextInput(
+            label="Descrizione",
+            style=discord.TextStyle.paragraph,
+            default=(row["description"] or "")[:1500] or None,
+            max_length=1500,
+            required=False,
+        )
+        self.f_link = discord.ui.TextInput(
+            label="Immagine: link",
+            default=row["image_url"] or None,
+            placeholder="https://...",
+            max_length=1000,
+            required=False,
+        )
+        for item in (self.f_title, self.f_when, self.f_place, self.f_desc, self.f_link):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Qui le date passate sono ammesse: serve proprio per le uscite vecchie
+        event_dt = parse_event_dt(self.f_when.value)
+        if not event_dt:
+            await interaction.response.send_message(
+                "❌ Formato data non valido. Usa `GG/MM/AAAA HH:MM`.", ephemeral=True
+            )
+            return
+
+        link = self.f_link.value.strip()
+        if link and not link.startswith(("http://", "https://")):
+            await interaction.response.send_message("❌ Il link dell'immagine non è valido.", ephemeral=True)
+            return
+
+        updates = {
+            "title": self.f_title.value.strip(),
+            "event_ts": int(event_dt.timestamp()),
+            "place": self.f_place.value.strip(),
+            "description": self.f_desc.value.strip(),
+            "image_url": link,
+            **self.extra,
+        }
+        self.cog.db.update_uscita(self.row["thread_id"], **updates)
+        logger.info(f"Uscita {self.row['thread_id']} completata da {interaction.user.name}: {', '.join(updates)}")
+        await interaction.response.send_message(
+            f"✅ Dati salvati per **{updates['title']}** (<#{self.row['thread_id']}>).\n"
+            "-# Il post su Discord non viene modificato: sono aggiornati solo i dati nel database.",
+            ephemeral=True,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.error("Errore nel modal completa uscita", exc_info=error)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ Si è verificato un errore.", ephemeral=True)
 
 
 # =========================================================================
@@ -793,6 +960,83 @@ class Uscite(commands.Cog):
     # Import delle uscite vecchie
     # ---------------------------------------------------------------------
 
+    @app_commands.command(
+        name="completa_uscita",
+        description="Aggiungi o correggi i dati di un'uscita già registrata nel database (solo mod).",
+    )
+    @app_commands.describe(
+        uscita="Uscita da completare (default: il thread in cui ti trovi). Quelle con dati mancanti sono segnate con ⚠️.",
+        prenotazione="Imposta se l'uscita era su prenotazione.",
+        avviso="Avviso in evidenza (scrivi - per rimuoverlo).",
+        tipo="Uscita dal vivo o evento online.",
+        organizzatore="Chi ha organizzato l'uscita.",
+    )
+    @app_commands.choices(tipo=[
+        app_commands.Choice(name="Uscita", value="LIVE"),
+        app_commands.Choice(name="Evento online", value="ONLINE"),
+    ])
+    @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.guilds(*GUILD_ID)
+    async def completa_uscita(
+            self,
+            interaction: discord.Interaction,
+            uscita: Optional[str] = None,
+            prenotazione: Optional[bool] = None,
+            avviso: Optional[app_commands.Range[str, 1, 200]] = None,
+            tipo: Optional[app_commands.Choice[str]] = None,
+            organizzatore: Optional[discord.Member] = None,
+    ):
+        if uscita:
+            if not uscita.isdigit():
+                await interaction.response.send_message("❌ Scegli un'uscita dall'elenco.", ephemeral=True)
+                return
+            thread_id = int(uscita)
+        elif isinstance(interaction.channel, discord.Thread):
+            thread_id = interaction.channel.id
+        else:
+            await interaction.response.send_message(
+                "❌ Scegli un'uscita dall'elenco oppure usa il comando dentro il suo thread.", ephemeral=True
+            )
+            return
+
+        row = self.db.get_uscita_full(thread_id)
+        if not row or row["guild_id"] != interaction.guild.id:
+            await interaction.response.send_message(
+                "❌ Uscita non trovata nel database. Se è vecchia, registrala prima con `/importa_uscite`.",
+                ephemeral=True,
+            )
+            return
+
+        extra = {}
+        if prenotazione is not None:
+            extra["reservation"] = prenotazione
+        if avviso is not None:
+            extra["warning"] = "" if avviso.strip() == "-" else avviso.strip()
+        if tipo is not None:
+            extra["kind"] = tipo.value
+        if organizzatore is not None:
+            extra["creator_id"] = organizzatore.id
+
+        await interaction.response.send_modal(CompletaUscitaModal(self, row, extra))
+
+    @completa_uscita.autocomplete("uscita")
+    async def completa_uscita_autocomplete(self, interaction: discord.Interaction, current: str):
+        rows = self.db.search_uscite(interaction.guild.id, current.strip(), limit=25)
+        choices = []
+        for r in rows:
+            incomplete = not r["place"] or not r["description"] or not r["image_url"]
+            when = datetime.fromtimestamp(r["event_ts"], TZ).strftime("%d/%m/%y")
+            name = f"{'⚠️ ' if incomplete else ''}{when} — {r['title']}"[:100]
+            choices.append(app_commands.Choice(name=name, value=str(r["thread_id"])))
+        return choices
+
+    @completa_uscita.error
+    async def completa_uscita_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("❌ Non hai i permessi per usare questo comando.", ephemeral=True)
+        else:
+            logger.error("Errore in /completa_uscita", exc_info=error)
+
     @staticmethod
     def _message_text(msg: discord.Message) -> str:
         parts = [msg.content or ""]
@@ -805,7 +1049,7 @@ class Uscite(commands.Cog):
 
     @app_commands.command(
         name="importa_uscite",
-        description="Importa nel database le uscite vecchie postate a mano nel canale (solo mod).",
+        description="Importa nel database le uscite vecchie postate nel canale e completa quelle con dati mancanti (solo mod).",
     )
     @app_commands.describe(
         fino_al="Ultimo giorno da importare, GG/MM/AAAA (default: 25/10/2026).",
@@ -842,26 +1086,40 @@ class Uscite(commands.Cog):
             if m.poll and m.reference and m.reference.message_id:
                 polls_by_ref.setdefault(m.reference.message_id, []).append(m)
 
-        found: list[tuple[int, str]] = []     # (event_ts, riga del report)
+        found: list[tuple[int, str]] = []  # (event_ts, riga del report)
         missing: list[str] = []
-        existing = ignored = 0
+        existing = completed = ignored = 0
 
         for msg in messages:
-            # Salto risposte, messaggi di sistema e i messaggi del bot (già registrati o sondaggi/conferme)
-            if msg.author.id == self.bot.user.id or msg.reference or msg.type != discord.MessageType.default:
+            # Salto risposte (sondaggi e conferme) e messaggi di sistema
+            if msg.reference or msg.type != discord.MessageType.default:
+                continue
+
+            role_ping = any(r.id == USCITE_ROLE_ID for r in msg.role_mentions)
+            # I post delle vecchie uscite sono scritti dal bot: li tengo se hanno embed o ping al ruolo,
+            # scarto i suoi sondaggi
+            if msg.author.id == self.bot.user.id and (msg.poll or not (msg.embeds or role_ping)):
                 continue
 
             text = self._message_text(msg)
             parsed = parse_old_event_ts(text, msg.created_at)
-            role_ping = any(r.id == USCITE_ROLE_ID for r in msg.role_mentions)
             strong = msg.flags.has_thread or bool(msg.embeds) or role_ping
             if not (strong or (msg.poll and parsed)):
-                ignored += 1          # chiacchiere o altro che non sembra un'uscita
+                ignored += 1  # chiacchiere o altro che non sembra un'uscita
                 continue
 
             # Il thread ha lo stesso ID del messaggio: se c'è già, l'uscita è registrata
-            if self.db.get_by_thread(msg.id):
+            row = self.db.get_uscita_full(msg.id)
+            if row:
                 existing += 1
+                updates = self._missing_updates(row, parse_old_event_fields(msg, None))
+                if updates:
+                    completed += 1
+                    if salva:
+                        self.db.update_uscita(msg.id, **updates)
+                    when = datetime.fromtimestamp(row["event_ts"], TZ).strftime("%d/%m/%Y %H:%M")
+                    found.append((row["event_ts"],
+                                  f"🔧 {when} — {row['title']} — completata: {', '.join(updates)} — {msg.jump_url}"))
                 continue
 
             if not parsed:
@@ -893,41 +1151,52 @@ class Uscite(commands.Cog):
             rest = [x for x in polls if x is not final]
             first = rest[0] if rest else None
 
-            title = guess_old_title(msg, thread, text)
+            fields = parse_old_event_fields(msg, thread)
+            title = fields["title"]
 
             if salva:
                 self.db.add_uscita(
                     guild_id=interaction.guild.id,
                     thread_id=msg.id,
                     poll_message_id=first.id if first else 0,
-                    creator_id=msg.author.id,
+                    creator_id=creator_from_footer(interaction.guild, msg) or msg.author.id,
                     title=title,
                     event_ts=event_ts,
                     reminder_ts=event_ts,
-                    sent=True,                     # niente sondaggio di conferma automatico
+                    sent=True,  # niente sondaggio di conferma automatico
                     final_poll_message_id=final.id if final else 0,
                     list_message_id=0,
                     final_enabled=False,
                     kind="LIVE",
                     channel_id=channel.id,
-                    description=text[:4000],
-                    place="",
-                    image_url=next((e.image.url for e in msg.embeds if e.image), "")
-                              or (msg.attachments[0].url if msg.attachments else ""),
+                    description=fields["description"],
+                    place=fields["place"],
+                    image_url=fields["image_url"],
+                    reservation=fields["reservation"],
+                    warning=fields["warning"],
+                    kaomoji=fields["kaomoji"],
                     created_ts=int(msg.created_at.timestamp()),
                 )
 
             when = datetime.fromtimestamp(event_ts, TZ).strftime("%d/%m/%Y %H:%M")
+            flags = []
+            if not has_time:
+                flags.append("ora non trovata")
+            if not fields["place"]:
+                flags.append("luogo mancante")
+            if not fields["image_url"]:
+                flags.append("senza immagine")
             line = (
-                f"✅ {when}{'' if has_time else ' (ora non trovata)'} — {title} — "
+                f"✅ {when} — {title}{' (' + ', '.join(flags) + ')' if flags else ''} — "
                 f"sondaggi: {'sì' if first else 'no'}/{'sì' if final else 'no'} — {msg.jump_url}"
             )
             found.append((event_ts, line))
 
         found.sort(key=lambda x: x[0])
+        new_count = len(found) - completed
         header = (
-            f"{'IMPORTATE' if salva else 'ANTEPRIMA (nulla è stato salvato)'}: {len(found)} uscite\n"
-            f"Già presenti nel database: {existing}\n"
+            f"{'IMPORTATE' if salva else 'ANTEPRIMA (nulla è stato salvato)'}: {new_count} nuove uscite\n"
+            f"Già presenti nel database: {existing} (di cui completate: {completed})\n"
             f"Senza data riconosciuta: {len(missing)}\n"
             f"Messaggi ignorati (non sembrano uscite): {ignored}\n"
             f"Fino al: {fino_al}\n\n"
@@ -936,20 +1205,33 @@ class Uscite(commands.Cog):
         if missing:
             report += "\n\n" + "\n".join(missing)
 
-        logger.info(f"importa_uscite da {interaction.user.name}: salva={salva} importate={len(found)} "
-                    f"esistenti={existing} senza_data={len(missing)} ignorati={ignored}")
+        logger.info(f"importa_uscite da {interaction.user.name}: salva={salva} nuove={new_count} "
+                    f"esistenti={existing} completate={completed} senza_data={len(missing)} ignorati={ignored}")
 
         summary = (
-            f"{'✅ Importate' if salva else '👀 Anteprima:'} **{len(found)}** uscite "
-            f"(già presenti: {existing}, senza data: {len(missing)}, ignorati: {ignored})."
+            f"{'✅ Importate' if salva else '👀 Anteprima:'} **{new_count}** nuove uscite "
+            f"(già presenti: {existing}, completate: {completed}, senza data: {len(missing)}, ignorati: {ignored})."
         )
         if not salva and found:
             summary += "\nControlla il report e rilancia con `salva: True` per scrivere nel database."
+        if missing:
+            summary += "\nPer quelle senza data usa `/completa_uscita` dopo averle registrate, oppure scrivi la data nel post."
         await interaction.followup.send(
             summary,
             file=discord.File(io.BytesIO(report.encode("utf-8")), filename="importa_uscite.txt"),
             ephemeral=True,
         )
+
+    @staticmethod
+    def _missing_updates(row: dict, fields: dict) -> dict:
+        """Campi vuoti nel database che il post permette di riempire (non sovrascrive mai nulla)."""
+        updates = {}
+        for key in ("place", "description", "image_url", "kaomoji", "warning"):
+            if not row[key] and fields[key]:
+                updates[key] = fields[key]
+        if fields["reservation"] and not row["reservation"]:
+            updates["reservation"] = True
+        return updates
 
     @importa_uscite.error
     async def importa_uscite_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):

@@ -286,3 +286,33 @@ class UsciteSystem(BaseDatabase):
         cursor.execute(f"UPDATE proposte_uscite SET {sets} WHERE id = %s", (*fields.values(), proposta_id))
         self.conn.commit()
         cursor.close()
+
+    _USCITA_EDITABLE = {"title", "event_ts", "place", "description", "image_url", "reservation",
+                        "warning", "kaomoji", "kind", "creator_id"}
+
+    def update_uscita(self, thread_id: int, **fields):
+        fields = {k: v for k, v in fields.items() if k in self._USCITA_EDITABLE}
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = %s" for k in fields)
+        cursor = self.get_cursor()
+        cursor.execute(f"UPDATE uscite SET {sets} WHERE thread_id = %s", (*fields.values(), thread_id))
+        self.conn.commit()
+        cursor.close()
+
+    def search_uscite(self, guild_id: int, query: str = "", limit: int = 25):
+        """Per l'autocomplete: prima le uscite con dati mancanti, poi le più recenti."""
+        cursor = self.get_cursor()
+        cursor.execute(
+            f"""
+            SELECT {', '.join(self._USCITA_COLS)} FROM uscite
+            WHERE guild_id = %s AND title LIKE %s
+            ORDER BY (place = '' OR description IS NULL OR description = '' OR image_url = '') DESC,
+                     event_ts DESC
+            LIMIT %s
+            """,
+            (guild_id, f"%{query}%", limit),
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        return [self._uscita_row_to_dict(r) for r in rows]
