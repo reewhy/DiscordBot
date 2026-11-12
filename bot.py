@@ -20,6 +20,7 @@ from cogs.mod_logs import ModLogs
 from cogs.roles import Roles
 from cogs.triggers import Triggers
 from cogs.uscite import Uscite
+from cogs.marcatino import MercatinoCog
 from config import GUILD_ID
 from config import DM_CATEGORY_ID
 from utils import roles_system
@@ -33,6 +34,7 @@ from utils.roles_system import RoleSystem
 from utils.server_system import ServerSystem
 from utils.triggers_system import TriggersSystem
 from utils.uscite_system import UsciteSystem
+from utils.mercatino_system import MercatinoSystem
 from views.ticket_view import TicketView, TicketControlView, CloseDMChannelView
 
 from utils.board_system import utcnow
@@ -117,6 +119,13 @@ uscite_system = UsciteSystem(
     database=database
 )
 
+mercatino_system = MercatinoSystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+
 initial_extensions = [
     "cogs.basic",
     "cogs.embed",
@@ -171,6 +180,8 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.triggers")
             await self.add_cog(Uscite(self, uscite_system))
             logger.info("Loaded extension: cogs.uscite")
+            await self.add_cog(MercatinoCog(self, mercatino_system))
+            logger.info("Loaded extension: cogs.mercatino")
         except Exception as e:
             logger.error("Failed to load extension", exc_info=e)
 
