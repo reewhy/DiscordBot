@@ -660,12 +660,14 @@ class Uscite(commands.Cog):
             return
 
         uscita_id, poll_message_id, event_ts, sent = row
+        # I sondaggi vivono nel canale delle uscite, non nel thread
+        poll_channel = thread.parent or await self.bot.fetch_channel(thread.parent_id)
         await interaction.response.defer(ephemeral=True)
 
         try:
             if not sent:
                 # Il primo sondaggio può non esistere (uscita vicina): in quel caso `sent` è già True
-                poll_msg = await thread.fetch_message(poll_message_id)
+                poll_msg = await poll_channel.fetch_message(poll_message_id)
                 if poll_msg.poll and not poll_msg.poll.is_finalised():
                     await poll_msg.poll.end()
 
@@ -678,14 +680,24 @@ class Uscite(commands.Cog):
                     "✅ Sondaggio terminato e sondaggio di conferma inviato.", ephemeral=True
                 )
             else:
+                # Nel canale ci sono sondaggi di eventi diversi: cerco solo quelli
+                # che sono risposte al messaggio di questa uscita (stesso ID del thread)
                 target = None
-                async for msg in thread.history(limit=50):
-                    if msg.author.id == self.bot.user.id and msg.poll and not msg.poll.is_finalised():
+                async for msg in poll_channel.history(limit=100):
+                    if (
+                        msg.author.id == self.bot.user.id
+                        and msg.poll
+                        and not msg.poll.is_finalised()
+                        and (
+                            msg.id == poll_message_id
+                            or (msg.reference and msg.reference.message_id == thread.id)
+                        )
+                    ):
                         target = msg
                         break
 
                 if not target:
-                    await interaction.followup.send("❌ Non c'è nessun sondaggio attivo in questo thread.",
+                    await interaction.followup.send("❌ Non c'è nessun sondaggio attivo per questa uscita.",
                                                     ephemeral=True)
                     return
 
@@ -802,92 +814,101 @@ class Uscite(commands.Cog):
         except Exception as e:
             logger.error(f"Impossibile creare l'evento Discord per '{p['title']}'", exc_info=e)
 
-    async def publish_uscita(
-            self, guild: discord.Guild, p: dict, attachment: Optional[discord.Attachment] = None
-    ) -> discord.Message:
-        """Pubblica l'uscita o l'evento online direttamente come messaggio nel canale (con sondaggio)."""
-        is_online = p.get("kind") == "ONLINE"
-        channel_id = EVENTI_ONLINE_ID if is_online else USCITE_ID
-        channel = guild.get_channel(channel_id)
-
-        if not isinstance(channel, discord.TextChannel):
-            raise ValueError("Il canale di pubblicazione non è configurato o non è un canale di testo.")
-
-        filename = None
-        kwargs = {}
-        if attachment:
-            file = await attachment.to_file()
-            kwargs["file"] = file
-            filename = file.filename
-        elif p.get("image_url") and not p.get("has_file"):
-            # Se c'è un link immagine ma non un file allegato
-            pass
-
-        content, embeds = await self.build_proposal_payload(guild, p, filename)
-
-        # 1. Invia il messaggio principale dell'uscita direttamente nel canale
-        msg = await channel.send(
-            content=content,
-            embeds=embeds,
-            allowed_mentions=discord.AllowedMentions(roles=True),
-            **kwargs,
-        )
-
-        # Se l'evento online ha i sondaggi disattivati, ci fermiamo qui
-        if is_online and not p.get("final_poll", True):
-            return msg
-
-        # 2. Crea e invia il sondaggio direttamente nel canale (subito sotto o collegato al messaggio)
+    async def publish_uscita(self, guild: discord.Guild, p: dict,
+                             attachment: Optional[discord.Attachment]) -> discord.Thread:
+        """Pubblica messaggio, sondaggio e lista. Solleva ValueError per errori da mostrare allo staff."""
         now = datetime.now(TZ)
         event_dt = datetime.fromtimestamp(p["event_ts"], TZ)
-        diff_hours = (event_dt - now).total_seconds() / 3600
+        if event_dt <= now:
+            raise ValueError("La data è già passata: modifica la proposta prima di approvarla.")
 
-        # Scegli il ruolo dapingare in base al tipo di evento
-        role_id = EVENTI_ONLINE_ROLE_ID if is_online else USCITE_ROLE_ID
-        role_mention = f"<@&{role_id}>" if role_id else ""
+        online = p.get("kind") == "ONLINE"
+        channel_id = EVENTI_ONLINE_ID if online else USCITE_ID
+        role_id = EVENTI_ONLINE_ROLE_ID if online else USCITE_ROLE_ID
 
-        if diff_hours <= 24:
-            # Se l'uscita è vicina, salta il sondaggio preliminare e lancia direttamente la conferma
-            poll = discord.Poll(
-                question=f"Conferma presenza per: {p['title']}",
-                duration=timedelta(hours=min(MAX_POLL_HOURS, int(diff_hours * 24))),
-            )
+        channel = guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            raise ValueError("Il canale di pubblicazione non è configurato correttamente.")
+
+        # I sondaggi e la lista si possono disattivare solo per gli eventi online
+        polls_enabled = bool(p.get("final_poll", True)) if online else True
+        logger.info(f"publish_uscita '{p['title']}': kind={p.get('kind')} final_poll={p.get('final_poll')} "
+                    f"-> sondaggi={polls_enabled}")
+
+        # Le durate si calcolano ora, non quando la proposta è stata creata
+        reminder_dt = (event_dt - timedelta(days=1)).replace(
+            hour=REMINDER_HOUR, minute=0, second=0, microsecond=0
+        )
+        poll_hours = math.floor((reminder_dt - now).total_seconds() / 3600)
+        send_poll_first = poll_hours >= 1
+        poll_hours = min(poll_hours, MAX_POLL_HOURS)
+
+        # Immagine: il file viene ricaricato nel canale di pubblicazione
+        kwargs = {}
+        image_ref = None
+        image_bytes = None
+        if p["has_file"] and attachment:
+            image_bytes = await attachment.read()
+            file = discord.File(io.BytesIO(image_bytes), filename=attachment.filename)
+            kwargs["file"] = file
+            image_ref = f"attachment://{file.filename}"
+        elif p["image_url"]:
+            image_ref = p["image_url"]
+
+        creator = await self.get_creator(guild, p["creator_id"])
+        embeds = build_uscita_embeds(p, creator, image_ref)
+
+        main_msg = await channel.send(
+            content=f"<@&{role_id}>",
+            embeds=embeds,
+            allowed_mentions=discord.AllowedMentions(roles=[discord.Object(id=role_id)]),
+            **kwargs,
+        )
+        # Il thread di discussione nasce dal messaggio principale (stesso ID del messaggio)
+        thread = await main_msg.create_thread(name=p["title"][:100], auto_archive_duration=10080)
+
+        # Nessun sondaggio, nessuna lista, niente salvataggio: l'evento finisce qui
+        if not polls_enabled:
+            return thread
+
+        poll_msg_id = 0
+        final_poll_id = 0
+        if send_poll_first:
+            poll = discord.Poll(question="Ci sarai?", duration=timedelta(hours=poll_hours))
             poll.add_answer(text=ANSWER_YES, emoji="✅")
-            poll.add_answer(text=ANSWER_NO, emoji="❌")
-
-            poll_msg = await channel.send(content=role_mention, poll=poll)
-
-            # Registra nel database che il primo sondaggio è saltato e memorizza la conferma
-            uscita_id = self.db.add_uscita(
-                guild_id=guild.id,
-                message_id=msg.id,
-                poll_message_id=poll_msg.id,
-                event_ts=p["event_ts"],
+            poll.add_answer(text=ANSWER_MAYBE, emoji="🤔")
+            # Nel canale delle uscite, come risposta al messaggio principale
+            poll_msg = await channel.send(
+                poll=poll,
+                reference=main_msg.to_reference(fail_if_not_found=False),
+                mention_author=False,
             )
-            self.db.mark_sent(uscita_id)
-            self.schedule_final_poll_refresh(uscita_id, poll_msg.id, p["event_ts"])
+            poll_msg_id = poll_msg.id
         else:
-            # Crea il sondaggio standard preliminare (Sì / Forse / No)
-            poll_duration = min(MAX_POLL_HOURS, math.floor(diff_hours - 24))
-            poll = discord.Poll(
-                question=f"Parteciperai a: {p['title']}?",
-                duration=timedelta(hours=poll_duration),
+            # Troppo vicino: direttamente il sondaggio di conferma
+            final_poll_id = await self.send_final_poll(
+                thread.id, None, p["event_ts"], forced=True, force_send=True
             )
-            poll.add_answer(text=ANSWER_YES, emoji="✅")
-            poll.add_answer(text=ANSWER_MAYBE, emoji="❓")
-            poll.add_answer(text=ANSWER_NO, emoji="❌")
 
-            poll_msg = await channel.send(content=role_mention, poll=poll)
+        list_id = await self.create_list_message(thread, p["title"])
 
-            uscita_id = self.db.add_uscita(
-                guild_id=guild.id,
-                message_id=msg.id,
-                poll_message_id=poll_msg.id,
-                event_ts=p["event_ts"],
-            )
-            self.schedule_final_poll_refresh(uscita_id, poll_msg.id, p["event_ts"])
+        self.db.add_uscita(
+            guild_id=guild.id,
+            thread_id=thread.id,
+            poll_message_id=poll_msg_id,
+            creator_id=p["creator_id"],
+            title=p["title"],
+            event_ts=p["event_ts"],
+            reminder_ts=int(reminder_dt.timestamp()),
+            sent=not send_poll_first,
+            final_poll_message_id=final_poll_id,
+            list_message_id=list_id,
+            final_enabled=True,
+        )
 
-        return msg
+        await self.create_discord_event(guild, p, thread, image_bytes)
+
+        return thread
 
     # ---------------------------------------------------------------------
     # Sondaggio di conferma automatico
@@ -919,11 +940,15 @@ class Uscite(commands.Cog):
             return 0
 
         thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
+        # I sondaggi vivono nel canale delle uscite, non nel thread
+        channel = thread.parent or await self.bot.fetch_channel(thread.parent_id)
+        # Il thread ha lo stesso ID del messaggio da cui è nato
+        ref = discord.MessageReference(message_id=thread_id, channel_id=channel.id, fail_if_not_found=False)
 
         # Menziona solo chi ha votato "Forse..."
         voters: dict[int, discord.abc.User] = {}
         if poll_message_id:
-            poll_msg = await thread.fetch_message(poll_message_id)
+            poll_msg = await channel.fetch_message(poll_message_id)
             if poll_msg.poll:
                 for answer in poll_msg.poll.answers:
                     if answer.text != ANSWER_MAYBE:
@@ -949,7 +974,7 @@ class Uscite(commands.Cog):
             header = f"📢 **Domani è il grande giorno!** (<t:{event_ts}:F>)\nConfermate la vostra presenza:"
 
         if not mentions:
-            msg = await thread.send(content=header, poll=poll)
+            msg = await channel.send(content=header, poll=poll, reference=ref, mention_author=False)
             return msg.id
 
         chunks, current = [], header + "\n"
@@ -960,9 +985,14 @@ class Uscite(commands.Cog):
             current += m + " "
         chunks.append(current)
 
+        # Il riferimento al messaggio dell'uscita va solo sul primo messaggio inviato
+        first = True
         for chunk in chunks[:-1]:
-            await thread.send(content=chunk)
-        msg = await thread.send(content=chunks[-1], poll=poll)
+            await channel.send(content=chunk, reference=ref if first else None, mention_author=False)
+            first = False
+        msg = await channel.send(
+            content=chunks[-1], poll=poll, reference=ref if first else None, mention_author=False
+        )
         return msg.id
 
     # ---------------------------------------------------------------------
@@ -1004,13 +1034,15 @@ class Uscite(commands.Cog):
     async def refresh_list(self, row):
         uscita_id, thread_id, poll_id, final_id, list_id, title = row
         thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
+        # I sondaggi vivono nel canale delle uscite, non nel thread
+        poll_channel = thread.parent or await self.bot.fetch_channel(thread.parent_id)
 
         async def voters_of(message_id: int, text: str) -> set[int]:
             ids: set[int] = set()
             if not message_id:
                 return ids
             try:
-                msg = await thread.fetch_message(message_id)
+                msg = await poll_channel.fetch_message(message_id)
             except discord.NotFound:
                 return ids
             if msg.poll:
