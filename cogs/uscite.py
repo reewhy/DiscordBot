@@ -1049,7 +1049,7 @@ class Uscite(commands.Cog):
 
     @app_commands.command(
         name="importa_uscite",
-        description="Importa nel database le uscite vecchie postate nel canale e completa quelle con dati mancanti (solo mod).",
+        description="Importa nel database le uscite vecchie postate.",
     )
     @app_commands.describe(
         fino_al="Ultimo giorno da importare, GG/MM/AAAA (default: 25/10/2026).",
