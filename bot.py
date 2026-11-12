@@ -35,6 +35,9 @@ from utils.triggers_system import TriggersSystem
 from utils.uscite_system import UsciteSystem
 from views.ticket_view import TicketView, TicketControlView, CloseDMChannelView
 
+from utils.board_system import utcnow
+IMAGE_EXTS = ('png', 'jpg', 'jpeg', 'gif', 'webp')
+
 # Initialize logger
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
@@ -344,6 +347,31 @@ class DiscordBot(commands.Bot):
                     except discord.HTTPException as e:
                         logger.error(f"Failed to add festeggiato role to {member.id}: {e}")
 
+    async def snapshot_post(self, message: discord.Message, board_msg: discord.Message, stars: int):
+        image_url = next((a.url for a in message.attachments
+                          if a.filename.lower().endswith(IMAGE_EXTS)), None)
+        board_system.upsert_post(dict(
+            message_id=message.id,
+            guild_id=message.guild.id,
+            channel_id=message.channel.id,
+            author_id=message.author.id,
+            author_name=message.author.display_name[:100],
+            author_avatar=message.author.display_avatar.url,
+            content=message.content,
+            image_url=image_url,
+            attachments=len(message.attachments),
+            jump_url=message.jump_url,
+            board_channel_id=board_msg.channel.id,
+            board_message_id=board_msg.id,
+            stars=stars,
+            message_created_at=message.created_at.replace(tzinfo=None),
+            boarded_at=utcnow(),
+        ))
+
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        # Se qualcuno cancella a mano il messaggio nella board, il post non è più attivo
+        board_system.deactivate_by_board_message(payload.message_id)
+
     @tasks.loop(time=BIRTHDAY_ROLE_UPDATE_TIME)
     async def update_birthday_role(self):
         try:
@@ -585,7 +613,10 @@ class DiscordBot(commands.Bot):
         target_emoji = '⭐'
 
         if payload.emoji.name == target_emoji:
+            board_system.add_star_user(payload.message_id, payload.user_id)  # NUOVO
             board_system.add_reaction(payload.message_id)
+            n_reactions = board_system.get_reactions(payload.message_id)[0]
+            board_system.set_post_stars(payload.message_id, n_reactions)  # NUOVO
             n_reactions = board_system.get_reactions(payload.message_id)[0]
 
             min_react = board_system.get_min_reactions(payload.guild_id)
@@ -639,6 +670,7 @@ class DiscordBot(commands.Bot):
                         logger.info("Successfully sent featured message to board channel!")
 
                         board_system.add_boarded(payload.message_id, sent_msg.id, message.author.id)
+                        await self.snapshot_post(message, sent_msg, n_reactions)   # NUOVO
                         logger.info(f"Saved to DB: Original {payload.message_id} -> Board {sent_msg.id}")
                     else:
                         logger.error(f"Board channel {channel_id} not found.")
@@ -751,6 +783,7 @@ class DiscordBot(commands.Bot):
                 board_message_id = board_message_id[0]
 
             board_system.remove_reaction(payload.message_id)
+            board_system.remove_star_user(payload.message_id, payload.user_id)  # NUOVO (dopo remove_reaction)
 
             reactions = board_system.get_reactions(payload.message_id)
             min_react = board_system.get_min_reactions(payload.guild_id)
@@ -760,6 +793,7 @@ class DiscordBot(commands.Bot):
                 current_reactions = reactions[0] if isinstance(reactions, tuple) else reactions
 
             if current_reactions < min_react:
+                board_system.deactivate_post(payload.message_id)
                 if board_message_id:
                     channel_id = board_system.get_board_channel(payload.guild_id)
                     channel = self.get_channel(channel_id) if channel_id else None
@@ -776,6 +810,10 @@ class DiscordBot(commands.Bot):
                                 f"Board message {board_message_id} not found. It may have been manually deleted.")
                         except discord.Forbidden:
                             logger.error("Bot lacks permissions in the board channel.")
+
+            board_system.set_post_stars(payload.message_id, current_reactions)
+
+
 
         # --- Self-Roles System ---
         role_id = roles_system.get_role(payload.message_id, str(emoji_identifier))

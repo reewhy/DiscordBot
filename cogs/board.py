@@ -1,25 +1,41 @@
-import discord
-from discord.ext import commands
-from discord import app_commands
+import asyncio
 import os
 import re
 
+import discord
+from discord import app_commands
+from discord.ext import commands
+
 from config import GUILD_ID
+from utils.board_system import BoardSystem
 from utils.debug import Logger
 from utils.embed_factory import EmbedFactory
-from utils.board_system import BoardSystem
 
 logger = Logger(os.path.basename(__file__).replace(".py", ""))
 
+JUMP_RE = re.compile(r'channels/(\d+)/(\d+)/(\d+)')
+IMAGE_EXTS = ('png', 'jpg', 'jpeg', 'gif', 'webp')
+
+
+def snippet(text: str | None, limit: int = 60) -> str:
+    text = (text or "").strip()
+    if not text:
+        return "*[Solo Immagine/Allegato]*"
+    return text[:limit] + "..." if len(text) > limit else text
+
+
+def jump(post: dict) -> str:
+    return post.get("jump_url") or "https://discord.com"
+
 
 class UserShamePagination(discord.ui.View):
-    def __init__(self, target: discord.Member, messages: list, per_page: int = 5):
+    def __init__(self, target: discord.Member, posts: list[dict], per_page: int = 5):
         super().__init__(timeout=180)
         self.target = target
-        self.messages = messages
+        self.posts = posts
         self.per_page = per_page
         self.current_page = 0
-        self.max_pages = max(1, (len(messages) + per_page - 1) // per_page)
+        self.max_pages = max(1, (len(posts) + per_page - 1) // per_page)
         self.update_buttons()
 
     def update_buttons(self):
@@ -29,35 +45,18 @@ class UserShamePagination(discord.ui.View):
     def create_embed(self):
         embed = EmbedFactory.create_embed(
             title=f"📜 I messaggi di {self.target.display_name}",
-            description=f"Pagina {self.current_page + 1} di {self.max_pages} (Totale: {len(self.messages)})",
+            description=f"Pagina {self.current_page + 1} di {self.max_pages} (Totale: {len(self.posts)})",
             colour=discord.Color.purple()
         )
-
-        avatar_url = self.target.avatar.url if self.target.avatar else self.target.default_avatar.url
-        embed.set_thumbnail(url=avatar_url)
+        embed.set_thumbnail(url=self.target.display_avatar.url)
 
         start = self.current_page * self.per_page
-        end = start + self.per_page
-        page_messages = self.messages[start:end]
-
-        for idx, (b_msg, reactions) in enumerate(page_messages, start + 1):
-            desc = b_msg.embeds[0].description if b_msg.embeds else ""
-
-            match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
-            jump_url = match.group(1) if match else b_msg.jump_url
-
-            clean_desc = desc.split("**[Jump to message!]")[0].strip()
-            if not clean_desc:
-                text_snippet = "*[Solo Immagine/Allegato]*"
-            else:
-                text_snippet = (clean_desc[:60] + "...") if len(clean_desc) > 60 else clean_desc
-
+        for idx, post in enumerate(self.posts[start:start + self.per_page], start + 1):
             embed.add_field(
-                name=f"#{idx} - (⭐ {reactions})",
-                value=f"{text_snippet}\n**[Vai al messaggio]({jump_url})**",
+                name=f"#{idx} - (⭐ {post['stars']})",
+                value=f"{snippet(post['content'])}\n**[Vai al messaggio]({jump(post)})**",
                 inline=False
             )
-
         return embed
 
     @discord.ui.button(label="◀️ Precedente", style=discord.ButtonStyle.blurple)
@@ -85,101 +84,156 @@ class HallOfShameCog(commands.Cog):
             super().__init__(name="shame", description="Statistiche e classifiche della Hall of Shame.")
             self.board_system = board_system
             self.bot = bot
+            self._sync_lock = asyncio.Lock()
 
-        # --- COMMAND TO FIX OLD MESSAGES (STAFF ONLY) ---
-        @app_commands.command(name="fix_database",
-                              description="[STAFF] Associa gli ID utente ai vecchi messaggi della board.")
+        # ------------------------------------------------------------------
+        # SYNC (STAFF): ricostruisce tutto il database dalla board
+        # ------------------------------------------------------------------
+        @app_commands.command(name="sync",
+                              description="[STAFF] Sincronizza il database con la Hall of Shame.")
+        @app_commands.describe(voters="Ricalcola anche chi ha messo le stelle (più lento)")
         @app_commands.checks.has_permissions(administrator=True)
-        async def fix_database(self, interaction: discord.Interaction):
-            await interaction.response.defer(ephemeral=True)
-            board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
-            board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
-                board_channel_id)
+        async def sync(self, interaction: discord.Interaction, voters: bool = True):
+            if self._sync_lock.locked():
+                await interaction.response.send_message("⏳ Una sincronizzazione è già in corso.", ephemeral=True)
+                return
 
-            cursor = self.board_system.get_cursor(buffered=True)
+            async with self._sync_lock:
+                await interaction.response.defer(ephemeral=True)
+                bs = self.board_system
+                guild = interaction.guild
 
-            # Make sure column exists before migrating
-            try:
-                cursor.execute("ALTER TABLE board ADD COLUMN author_id BIGINT")
-                self.board_system.conn.commit()
-            except:
-                pass
+                board_channel_id = bs.get_board_channel(guild.id)
+                if not board_channel_id:
+                    await interaction.followup.send("Canale board non configurato. Usa /setboard.", ephemeral=True)
+                    return
+                board_channel = guild.get_channel(board_channel_id) or await guild.fetch_channel(board_channel_id)
 
-            updated = 0
-            await interaction.followup.send("Inizio migrazione del database... Potrebbe volerci qualche secondo.",
-                                            ephemeral=True)
+                counters = {"scanned": 0, "synced": 0, "orig_deleted": 0, "skipped": 0}
+                seen_board_ids = set()
 
-            async for b_msg in board_channel.history(limit=None):
-                if b_msg.embeds:
-                    desc = b_msg.embeds[0].description if b_msg.embeds[0].description else ""
+                async def progress(text: str):
+                    try:
+                        await interaction.edit_original_response(content=text)
+                    except discord.HTTPException:
+                        pass  # token scaduto (15 min) o messaggio non modificabile
 
-                    match = re.search(r'channels/\d+/(\d+)/(\d+)', desc)
-                    if match:
-                        channel_id = int(match.group(1))
-                        msg_id = int(match.group(2))
+                await progress("🔄 Sincronizzazione avviata...")
 
-                        try:
-                            orig_channel = interaction.guild.get_channel(
-                                channel_id) or await interaction.guild.fetch_channel(channel_id)
-                            orig_msg = await orig_channel.fetch_message(msg_id)
-                            author_id = orig_msg.author.id
+                async for b_msg in board_channel.history(limit=None, oldest_first=True):
+                    if b_msg.author.id != self.bot.user.id or not b_msg.embeds:
+                        continue
+                    counters["scanned"] += 1
 
-                            cursor.execute("UPDATE board SET author_id = %s WHERE boarded = %s", (author_id, b_msg.id))
-                            updated += 1
-                        except Exception:
-                            pass  # Message deleted or inaccessible
+                    embed = b_msg.embeds[0]
+                    desc = embed.description or ""
+                    match = JUMP_RE.search(desc)
+                    if not match:
+                        counters["skipped"] += 1
+                        continue
 
-            self.board_system.conn.commit()
-            cursor.close()
+                    orig_guild_id, orig_channel_id, orig_msg_id = map(int, match.groups())
+                    seen_board_ids.add(b_msg.id)
+                    legacy = bs.get_legacy_row(orig_msg_id)
 
-            await interaction.edit_original_response(
-                content=f"✅ Migrazione completata! Ho aggiornato **{updated}** vecchi messaggi con i corretti ID utente.")
+                    # Provo a recuperare il messaggio originale
+                    orig = None
+                    try:
+                        channel = guild.get_channel_or_thread(orig_channel_id) or await guild.fetch_channel(
+                            orig_channel_id)
+                        orig = await channel.fetch_message(orig_msg_id)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        pass
 
-        async def get_top_messages(self, interaction: discord.Interaction, limit: int = 10):
-            board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
-            if not board_channel_id:
-                return None, "Canale board non configurato. Usa /setboard."
+                    voter_ids = None
+                    if orig:
+                        author = orig.author
+                        reaction = discord.utils.get(orig.reactions, emoji='⭐')
+                        stars = reaction.count if reaction else 0
+                        if voters and reaction:
+                            voter_ids = [u.id async for u in reaction.users() if not u.bot]
+                            stars = len(voter_ids)
+                        elif voters:
+                            voter_ids = []
 
-            board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
-                board_channel_id)
-            if not board_channel:
-                return None, "Impossibile trovare il canale board."
+                        image_url = next((a.url for a in orig.attachments
+                                          if a.filename.lower().endswith(IMAGE_EXTS)), None)
+                        author_id = author.id
+                        post = dict(
+                            author_id=author_id,
+                            author_name=author.display_name[:100],
+                            author_avatar=author.display_avatar.url,
+                            content=orig.content,
+                            image_url=image_url,
+                            attachments=len(orig.attachments),
+                            message_created_at=orig.created_at.replace(tzinfo=None),
+                        )
+                    else:
+                        # Originale cancellato: salvo quello che resta nell'embed della board
+                        counters["orig_deleted"] += 1
+                        author_id = legacy["author_id"] if legacy else None
+                        stars = legacy["reactions"] if legacy and legacy["reactions"] else 0
+                        post = dict(
+                            author_id=author_id,
+                            author_name=(embed.author.name[:100] if embed.author and embed.author.name else None),
+                            author_avatar=embed.author.icon_url if embed.author else None,
+                            content=desc.split("**[Jump to message!]")[0].strip(),
+                            image_url=embed.image.url if embed.image else None,
+                            attachments=1 if embed.image else 0,
+                            message_created_at=None,
+                        )
 
-            cursor = self.board_system.get_cursor(buffered=True)
-            cursor.execute("""
-                           SELECT message_id, reactions, boarded
-                           FROM board
-                           WHERE boarded != 0
-                           ORDER BY reactions DESC
-                               LIMIT %s
-                           """, (limit,))
-            rows = cursor.fetchall()
-            cursor.close()
+                    bs.upsert_post(dict(
+                        message_id=orig_msg_id,
+                        guild_id=guild.id,
+                        channel_id=orig_channel_id,
+                        jump_url=f"https://discord.com/channels/{orig_guild_id}/{orig_channel_id}/{orig_msg_id}",
+                        board_channel_id=board_channel.id,
+                        board_message_id=b_msg.id,
+                        stars=stars,
+                        boarded_at=b_msg.created_at.replace(tzinfo=None),
+                        **post
+                    ))
+                    bs.sync_legacy_board(orig_msg_id, stars, b_msg.id, author_id)
+                    if voter_ids is not None:
+                        bs.replace_stars(orig_msg_id, voter_ids)
 
-            top_messages = []
-            for row in rows:
-                orig_msg_id, reactions, boarded_id = row
+                    counters["synced"] += 1
+                    if counters["synced"] % 20 == 0:
+                        await progress(f"🔄 Sincronizzati {counters['synced']} messaggi...")
+
+                # Post nel DB che non esistono più nel canale board -> inattivi
+                removed = 0
+                for orig_id, board_id in bs.get_active_board_ids(guild.id):
+                    if board_id not in seen_board_ids:
+                        bs.deactivate_post(orig_id)
+                        removed += 1
+
+                summary = (
+                    f"✅ **Sync completato!**\n"
+                    f"• Messaggi letti nella board: **{counters['scanned']}**\n"
+                    f"• Sincronizzati: **{counters['synced']}**\n"
+                    f"• Originali cancellati (salvati dal backup dell'embed): **{counters['orig_deleted']}**\n"
+                    f"• Segnati come rimossi dalla board: **{removed}**\n"
+                    f"• Ignorati (senza link): **{counters['skipped']}**"
+                )
+                logger.info(f"Hall of Shame sync done: {counters}, removed={removed}")
                 try:
-                    b_msg = await board_channel.fetch_message(boarded_id)
-                    top_messages.append((b_msg, reactions))
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logger.warning(f"Boarded message {boarded_id} non trovato.")
-                    continue
+                    await interaction.edit_original_response(content=summary)
+                except discord.HTTPException:
+                    await interaction.channel.send(f"{interaction.user.mention}\n{summary}")
 
-            return top_messages, None
-
+        # ------------------------------------------------------------------
+        # COMANDI (tutti letti dal DB, nessun fetch_message)
+        # ------------------------------------------------------------------
         @app_commands.command(name="leaderboard",
                               description="Mostra la top 10 dei messaggi con più reazioni nel server.")
         async def leaderboard(self, interaction: discord.Interaction):
-            await interaction.response.defer()
-
-            top_messages, error = await self.get_top_messages(interaction, limit=10)
-            if error:
-                await interaction.followup.send(error, ephemeral=True)
-                return
-
-            if not top_messages:
-                await interaction.followup.send("Nessun messaggio trovato nella board!", ephemeral=True)
+            posts = self.board_system.get_top_posts(interaction.guild_id, limit=10)
+            if not posts:
+                await interaction.response.send_message(
+                    "Nessun messaggio trovato nella board! (Se è la prima volta, usa `/shame sync`)",
+                    ephemeral=True)
                 return
 
             embed = EmbedFactory.create_embed(
@@ -188,118 +242,56 @@ class HallOfShameCog(commands.Cog):
                 colour=discord.Color.gold(),
                 interaction=interaction
             )
-
-            for idx, (b_msg, reactions) in enumerate(top_messages, 1):
-                original_embed = b_msg.embeds[0] if b_msg.embeds else None
-                author_name = original_embed.author.name if original_embed and original_embed.author else "Utente Sconosciuto"
-                desc = original_embed.description if original_embed else ""
-
-                match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
-                jump_url = match.group(1) if match else b_msg.jump_url
-
-                clean_desc = desc.split("**[Jump to message!]")[0].strip()
-
-                if not clean_desc:
-                    text_snippet = "*[Solo Immagine/Allegato]*"
-                else:
-                    text_snippet = (clean_desc[:60] + "...") if len(clean_desc) > 60 else clean_desc
-
+            for idx, post in enumerate(posts, 1):
                 embed.add_field(
-                    name=f"#{idx} - {author_name} (⭐ {reactions})",
-                    value=f"{text_snippet}\n[Vai al messaggio]({jump_url})",
+                    name=f"#{idx} - {post['author_name'] or 'Utente Sconosciuto'} (⭐ {post['stars']})",
+                    value=f"{snippet(post['content'])}\n[Vai al messaggio]({jump(post)})",
                     inline=False
                 )
-
-            await interaction.followup.send(embed=embed)
+            await interaction.response.send_message(embed=embed)
 
         @app_commands.command(name="user_posts",
                               description="Mostra tutti i messaggi di un utente nella Hall of Shame.")
         @app_commands.describe(member="L'utente di cui vedere i messaggi (lascia vuoto per te)")
         async def user_posts(self, interaction: discord.Interaction, member: discord.Member = None):
             target = member or interaction.user
-            await interaction.response.defer()
-
-            board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
-            if not board_channel_id:
-                await interaction.followup.send("Canale board non configurato.", ephemeral=True)
-                return
-
-            board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
-                board_channel_id)
-
-            # Query SQL diretta usando author_id
-            cursor = self.board_system.get_cursor(buffered=True)
-            cursor.execute(
-                "SELECT boarded, reactions FROM board WHERE author_id = %s AND boarded != 0 ORDER BY reactions DESC",
-                (target.id,))
-            rows = cursor.fetchall()
-            cursor.close()
-
-            if not rows:
-                await interaction.followup.send(
-                    f"Al momento {target.mention} non ha nessun messaggio nella Hall of Shame. (Se hai aggiornato ora il bot, usa prima `/shame fix_database`)",
+            posts = self.board_system.get_user_posts(interaction.guild_id, target.id)
+            if not posts:
+                await interaction.response.send_message(
+                    f"Al momento {target.mention} non ha nessun messaggio nella Hall of Shame.",
                     ephemeral=True)
                 return
 
-            user_messages_list = []
-            for row in rows:
-                boarded_id, reactions = row
-                try:
-                    b_msg = await board_channel.fetch_message(boarded_id)
-                    user_messages_list.append((b_msg, reactions))
-                except:
-                    continue
-
-            view = UserShamePagination(target, user_messages_list, per_page=5)
-            embed = view.create_embed()
-
-            await interaction.followup.send(embed=embed, view=view)
+            view = UserShamePagination(target, posts, per_page=5)
+            await interaction.response.send_message(embed=view.create_embed(), view=view)
 
         @app_commands.command(name="top", description="Mostra il messaggio in assoluto più da moid/foid del server.")
         async def top_message(self, interaction: discord.Interaction):
-            await interaction.response.defer()
-
-            top_messages, error = await self.get_top_messages(interaction, limit=1)
-            if error:
-                await interaction.followup.send(error, ephemeral=True)
+            posts = self.board_system.get_top_posts(interaction.guild_id, limit=1)
+            if not posts:
+                await interaction.response.send_message("Nessun messaggio trovato nella board!", ephemeral=True)
                 return
 
-            if not top_messages:
-                await interaction.followup.send("Nessun messaggio trovato nella board!", ephemeral=True)
-                return
-
-            best_msg, reactions = top_messages[0]
-            original_embed = best_msg.embeds[0] if best_msg.embeds else None
-
+            best = posts[0]
             embed = EmbedFactory.create_embed(
-                title=f"👑 Il Chud finale (⭐ {reactions})",
-                description=original_embed.description if original_embed else best_msg.content,
+                title=f"👑 Il Chud finale (⭐ {best['stars']})",
+                description=f"{best['content'] or ''}\n\n**[Vai al messaggio]({jump(best)})**",
                 colour=discord.Color.gold(),
                 interaction=interaction
             )
+            if best["author_name"]:
+                embed.set_author(name=best["author_name"], icon_url=best["author_avatar"])
+            if best["image_url"]:
+                embed.set_image(url=best["image_url"])
 
-            if original_embed:
-                if original_embed.author:
-                    embed.set_author(name=original_embed.author.name, icon_url=original_embed.author.icon_url)
-                if original_embed.image:
-                    embed.set_image(url=original_embed.image.url)
-
-            await interaction.followup.send(content="Moid e foid, il livello più basso in assoluto di questo server:",
-                                            embed=embed)
+            await interaction.response.send_message(
+                content="Moid e foid, il livello più basso in assoluto di questo server:", embed=embed)
 
         @app_commands.command(name="stats", description="Mostra statistiche sulla Hall of Shame.")
         async def stats(self, interaction: discord.Interaction):
-            cursor = self.board_system.get_cursor(buffered=True)
-
-            cursor.execute("SELECT COUNT(*), SUM(reactions), MAX(reactions) FROM board WHERE boarded != 0")
-            row = cursor.fetchone()
-            cursor.close()
-
-            total_boarded = row[0] or 0
-            total_stars = int(row[1]) if row[1] else 0
-            max_stars = row[2] or 0
-
-            avg_stars = round(total_stars / total_boarded, 1) if total_boarded > 0 else 0
+            s = self.board_system.get_guild_stats(interaction.guild_id)
+            total_posts = s["total_posts"]
+            avg_stars = round(s["total_stars"] / total_posts, 1) if total_posts else 0
 
             embed = EmbedFactory.create_embed(
                 title="📊 Statistiche Hall of Shame",
@@ -307,35 +299,29 @@ class HallOfShameCog(commands.Cog):
                 colour=discord.Color.blurple(),
                 interaction=interaction
             )
-
-            embed.add_field(name="Messaggi nella hall of shame", value=f"**{total_boarded}**", inline=True)
-            embed.add_field(name="Stelle Totali Assegnate", value=f"**{total_stars}** ⭐", inline=True)
+            embed.add_field(name="Messaggi nella hall of shame", value=f"**{total_posts}**", inline=True)
+            embed.add_field(name="Stelle Totali Assegnate", value=f"**{s['total_stars']}** ⭐", inline=True)
             embed.add_field(name="Media Stelle per Post", value=f"**{avg_stars}** ⭐", inline=True)
-            embed.add_field(name="Record Assoluto", value=f"**{max_stars}** ⭐ su un singolo post", inline=False)
+            embed.add_field(name="Autori diversi", value=f"**{s['unique_authors']}**", inline=True)
+            embed.add_field(name="Post negli ultimi 7 giorni", value=f"**{s['posts_last_7d']}**", inline=True)
+            embed.add_field(name="Record Assoluto", value=f"**{s['max_stars']}** ⭐ su un singolo post",
+                            inline=False)
+
+            givers = self.board_system.get_top_givers(interaction.guild_id, limit=1)
+            if givers:
+                embed.add_field(name="Il più generoso di stelle",
+                                value=f"<@{givers[0]['user_id']}> ({givers[0]['stars_given']} ⭐ date)",
+                                inline=False)
 
             await interaction.response.send_message(embed=embed)
 
         @app_commands.command(name="user_leaderboard",
                               description="Mostra la top 10 degli utenti con più stelle totali.")
         async def user_leaderboard(self, interaction: discord.Interaction):
-            await interaction.response.defer()
-
-            # Completamente gestito da SQL ora!
-            cursor = self.board_system.get_cursor(buffered=True)
-            cursor.execute("""
-                           SELECT author_id, SUM(reactions) AS total_stars, COUNT(message_id) AS total_posts
-                           FROM board
-                           WHERE boarded != 0 AND author_id IS NOT NULL
-                           GROUP BY author_id
-                           ORDER BY total_stars DESC
-                               LIMIT 10
-                           """)
-            rows = cursor.fetchall()
-            cursor.close()
-
+            rows = self.board_system.get_author_ranking(interaction.guild_id, limit=10)
             if not rows:
-                await interaction.followup.send("Nessun utente trovato! (Usa `/shame fix_database` prima)",
-                                                ephemeral=True)
+                await interaction.response.send_message("Nessun utente trovato! (Usa `/shame sync` prima)",
+                                                        ephemeral=True)
                 return
 
             embed = EmbedFactory.create_embed(
@@ -344,111 +330,49 @@ class HallOfShameCog(commands.Cog):
                 colour=discord.Color.brand_red(),
                 interaction=interaction
             )
-
             for idx, row in enumerate(rows, 1):
-                author_id, total_stars, posts = row
-                total_stars = int(total_stars)
-                member = interaction.guild.get_member(author_id)
-                name = member.display_name if member else f"Sconosciuto ({author_id})"
-
-                media = round(total_stars / posts, 1)
+                member = interaction.guild.get_member(row["author_id"])
+                name = member.display_name if member else (row["author_name"] or f"Sconosciuto ({row['author_id']})")
+                media = round(row["total_stars"] / row["total_posts"], 1)
                 embed.add_field(
                     name=f"#{idx} - {name}",
-                    value=f"**{total_stars}** ⭐ totali su **{posts}** messaggi (Media: {media} ⭐)",
+                    value=f"**{row['total_stars']}** ⭐ totali su **{row['total_posts']}** messaggi (Media: {media} ⭐)",
                     inline=False
                 )
-
-            await interaction.followup.send(embed=embed)
+            await interaction.response.send_message(embed=embed)
 
         @app_commands.command(name="user",
                               description="Mostra le statistiche della Hall of Shame per te o per un altro utente.")
         @app_commands.describe(member="Il giocatore di cui vedere le statistiche (lascia vuoto per le tue)")
         async def user_stats(self, interaction: discord.Interaction, member: discord.Member = None):
             target = member or interaction.user
-            await interaction.response.defer()
-
-            board_channel_id = self.board_system.get_board_channel(interaction.guild_id)
-            if not board_channel_id:
-                await interaction.followup.send("Canale board non configurato.", ephemeral=True)
-                return
-
-            board_channel = interaction.guild.get_channel(board_channel_id) or await interaction.guild.fetch_channel(
-                board_channel_id)
-
-            cursor = self.board_system.get_cursor(buffered=True)
-
-            # Calcola la posizione
-            cursor.execute("""
-                           SELECT author_id, SUM(reactions) as total
-                           FROM board
-                           WHERE boarded != 0 AND author_id IS NOT NULL
-                           GROUP BY author_id
-                           ORDER BY total DESC
-                           """)
-            leaderboard = cursor.fetchall()
-
-            position = 0
-            for idx, row in enumerate(leaderboard, 1):
-                if row[0] == target.id:
-                    position = idx
-                    break
-
-            # Prendi i post dell'utente# Prendi i post dell'utente tramite l'ID di Discord (author_id)
-            cursor.execute("SELECT reactions, boarded FROM board WHERE author_id = %s AND boarded != 0", (target.id,))
-            user_posts = cursor.fetchall()
-            cursor.close()
-
-            target_boarded_count = len(user_posts)
-            if target_boarded_count == 0:
-                await interaction.followup.send(
+            posts = self.board_system.get_user_posts(interaction.guild_id, target.id)  # già ordinati per stelle
+            if not posts:
+                await interaction.response.send_message(
                     f"Al momento {target.mention} non ha nessun messaggio nella Hall of Shame.", ephemeral=True)
                 return
 
-            target_stars = sum(row[0] for row in user_posts)
-            avg_stars = round(target_stars / target_boarded_count, 1)
+            ranking = self.board_system.get_author_ranking(interaction.guild_id)
+            position = next((i for i, r in enumerate(ranking, 1) if r["author_id"] == target.id), 0)
 
-            # Trova il messaggio top
-            best_post = max(user_posts, key=lambda x: x[0])
-            target_max_stars = best_post[0]
-            best_boarded_id = best_post[1]
+            total_stars = sum(p["stars"] for p in posts)
+            avg_stars = round(total_stars / len(posts), 1)
+            best = posts[0]
 
-            target_best_msg = None
-            try:
-                target_best_msg = await board_channel.fetch_message(best_boarded_id)
-            except:
-                pass
-
-            avatar_url = target.avatar.url if target.avatar else target.default_avatar.url
-
-            embed_stats = EmbedFactory.create_embed(
+            embed = EmbedFactory.create_embed(
                 title=f"🎭 Statistiche Hall of Shame: {target.display_name}",
                 description=f"Il contributo di {target.mention} al disagio del server.",
                 colour=discord.Color.purple(),
-                thumbnail=avatar_url,
+                thumbnail=target.display_avatar.url,
                 interaction=interaction
             )
-
-            embed_stats.add_field(name="Posizione Server", value=f"**#{position}** su {len(leaderboard)} utenti",
-                                  inline=False)
-            embed_stats.add_field(name="Post nella Board", value=f"**{target_boarded_count}**", inline=True)
-            embed_stats.add_field(name="Stelle Totali", value=f"**{target_stars}** ⭐", inline=True)
-            embed_stats.add_field(name="Media Stelle", value=f"**{avg_stars}** ⭐", inline=True)
-
-            if target_best_msg and target_best_msg.embeds:
-                desc = target_best_msg.embeds[0].description if target_best_msg.embeds[0].description else ""
-                match = re.search(r'\((https://discord\.com/channels/[^\)]+)\)', desc)
-                jump_url = match.group(1) if match else target_best_msg.jump_url
-
-                clean_desc = desc.split("**[Jump to message!]")[0].strip()
-                if not clean_desc:
-                    text_snippet = "*[Solo Immagine/Allegato]*"
-                else:
-                    text_snippet = (clean_desc[:50] + "...") if len(clean_desc) > 50 else clean_desc
-
-                embed_stats.add_field(
-                    name=f"🌟 Miglior Messaggio (⭐ {target_max_stars})",
-                    value=f"{text_snippet}\n**[Vai al messaggio]({jump_url})**",
-                    inline=False
-                )
-
-            await interaction.followup.send(embed=embed_stats)
+            embed.add_field(name="Posizione Server", value=f"**#{position}** su {len(ranking)} utenti", inline=False)
+            embed.add_field(name="Post nella Board", value=f"**{len(posts)}**", inline=True)
+            embed.add_field(name="Stelle Totali", value=f"**{total_stars}** ⭐", inline=True)
+            embed.add_field(name="Media Stelle", value=f"**{avg_stars}** ⭐", inline=True)
+            embed.add_field(
+                name=f"🌟 Miglior Messaggio (⭐ {best['stars']})",
+                value=f"{snippet(best['content'], 50)}\n**[Vai al messaggio]({jump(best)})**",
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed)
