@@ -28,6 +28,7 @@ class CloseDMChannelView(discord.ui.View):
             # 1. Fetch all messages in the channel (from oldest to newest)
             messages_data = []
             async for msg in interaction.channel.history(limit=None, oldest_first=True):
+                logger.info(msg.content)
                 messages_data.append({
                     "author": str(msg.author),
                     "author_id": msg.author.id,
