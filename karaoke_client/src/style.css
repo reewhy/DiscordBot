@@ -1,0 +1,149 @@
+:root {
+  --curtain: #2a0e1f;
+  --velvet: #3b1530;
+  --velvet-hi: #4d1d3f;
+  --spot: #fff0d9;
+  --brass: #ffb23f;
+  --brass-ink: #2a0e1f;
+  --muted: #c7a0b3;
+  --danger: #ff8a7a;
+  --radius: 10px;
+  --font-display: 'Arial Rounded MT Bold', 'Trebuchet MS', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app { height: 100%; margin: 0; }
+
+body {
+  background: var(--curtain);
+  color: var(--spot);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+h1, h2, p, ul { margin: 0; padding: 0; }
+ul { list-style: none; }
+
+:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+
+/* ---------- layout ---------- */
+.app {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(320px, 1fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas: 'top top' 'stage side';
+  gap: 16px 20px;
+  height: 100%;
+  padding: 14px 20px 20px;
+}
+.top { grid-area: top; display: flex; align-items: center; justify-content: space-between; }
+.col-stage { grid-area: stage; min-height: 0; overflow-y: auto; }
+.col-side { grid-area: side; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+
+.brand { font-family: var(--font-display); font-size: 22px; letter-spacing: 0.02em; }
+
+.people { display: flex; }
+.people li {
+  width: 32px; height: 32px; margin-left: -8px;
+  border-radius: 50%; overflow: hidden;
+  border: 2px solid var(--curtain);
+  background: var(--velvet-hi);
+  display: grid; place-items: center; font-size: 12px; font-weight: 700;
+}
+.people img { width: 100%; height: 100%; object-fit: cover; }
+
+.status { height: 100%; display: grid; place-content: center; text-align: center; gap: 8px; padding: 24px; }
+.status h1 { font-family: var(--font-display); font-size: 28px; }
+.status p { color: var(--muted); }
+
+/* ---------- palco (il momento memorabile) ---------- */
+.stage {
+  display: flex; flex-direction: column; gap: 18px;
+  padding: 18px;
+  border-radius: 14px;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 0%, rgba(255, 178, 63, 0.32), transparent 70%),
+    var(--velvet);
+}
+
+.video {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.yt, .yt > div, .video iframe { width: 100%; height: 100%; border: 0; }
+.shield { position: absolute; inset: 0; } /* impedisce di cliccare dentro il player */
+.video-empty {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  background: var(--curtain); color: var(--muted);
+  font-family: var(--font-display); font-size: 20px;
+}
+.tap {
+  position: absolute; inset: 0; width: 100%;
+  border: 0; cursor: pointer;
+  background: rgba(42, 14, 31, 0.82); color: var(--spot);
+  font: inherit; font-family: var(--font-display); font-size: 20px;
+}
+
+.now { display: flex; flex-direction: column; gap: 10px; }
+.singer { color: var(--brass); font-weight: 600; }
+.song { font-family: var(--font-display); font-size: clamp(22px, 3.2vw, 34px); line-height: 1.15; overflow-wrap: anywhere; }
+.hint { color: var(--muted); font-size: 13px; }
+.error { color: var(--danger); font-size: 13px; margin-top: 8px; }
+
+.progress { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.progress input { flex: 1; accent-color: var(--brass); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ---------- pulsanti ---------- */
+.btn {
+  border: 1px solid rgba(255, 240, 217, 0.28);
+  background: transparent; color: var(--spot);
+  padding: 8px 14px; border-radius: 999px;
+  font: inherit; font-weight: 600; cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: rgba(255, 240, 217, 0.1); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn-main { background: var(--brass); border-color: var(--brass); color: var(--brass-ink); }
+.btn-main:hover:not(:disabled) { background: #ffc266; }
+
+/* ---------- pannelli laterali ---------- */
+.panel { background: var(--velvet); border-radius: 14px; padding: 16px; }
+.panel-title { font-family: var(--font-display); font-size: 17px; margin-bottom: 10px; }
+
+.search { display: flex; gap: 8px; }
+.search input {
+  flex: 1; min-width: 0;
+  padding: 9px 12px; border-radius: 999px;
+  border: 1px solid rgba(255, 240, 217, 0.28);
+  background: var(--curtain); color: var(--spot); font: inherit;
+}
+.search + .hint { margin-top: 6px; }
+
+.list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.row { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 8px; }
+.row:hover { background: var(--velvet-hi); }
+.row img { width: 72px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; background: var(--curtain); }
+.meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.meta strong { font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.meta span { font-size: 12px; color: var(--muted); }
+
+/* ---------- schermi stretti ---------- */
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    grid-template-areas: 'top' 'stage' 'side';
+    height: auto;
+    min-height: 100%;
+  }
+  .col-stage, .col-side { overflow: visible; }
+}

@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from config import GUILD_ID
+import config
 from karaoke_server.web import KaraokeSettings, create_app
 from utils.debug import Logger
 from utils.karaoke_system import KaraokeSystem
@@ -30,10 +31,12 @@ class KaraokeCog(commands.Cog):
     # ------------------------------------------------------------------
     async def cog_load(self):
         settings = KaraokeSettings(
-            # Il Client ID di un'applicazione Discord coincide con l'ID del bot.
-            client_id=os.getenv("DISCORD_CLIENT_ID") or str(self.bot.application_id),
-            client_secret=os.getenv("DISCORD_CLIENT_SECRET", ""),
-            youtube_api_key=os.getenv("YOUTUBE_API_KEY", ""),
+            client_id=str(getattr(config, "DISCORD_CLIENT_ID", None)
+                          or os.getenv("DISCORD_CLIENT_ID") or self.bot.application_id),
+            client_secret=getattr(config, "DISCORD_CLIENT_SECRET", None)
+                          or os.getenv("DISCORD_CLIENT_SECRET", ""),
+            youtube_api_key=getattr(config, "YOUTUBE_API_KEY", None)
+                            or os.getenv("YOUTUBE_API_KEY", ""),
             dist_dir=Path(os.getenv("KARAOKE_DIST", DEFAULT_DIST)),
         )
         if not settings.client_secret:
@@ -42,7 +45,7 @@ class KaraokeCog(commands.Cog):
             logger.warning("YOUTUBE_API_KEY mancante: la ricerca dei brani non funzionerà.")
 
         host = os.getenv("KARAOKE_HOST", "0.0.0.0")
-        port = int(os.getenv("KARAOKE_PORT", "3001"))
+        port = int(getattr(config, "KARAOKE_PORT", None) or os.getenv("KARAOKE_PORT", "4001"))
         try:
             self.runner = web.AppRunner(create_app(settings, self.system))
             await self.runner.setup()
