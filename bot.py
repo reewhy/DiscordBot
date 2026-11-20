@@ -21,7 +21,8 @@ from cogs.roles import Roles
 from cogs.triggers import Triggers
 from cogs.uscite import Uscite
 from cogs.marcatino import MercatinoCog
-from cogs.karaoke import KaraokeCog
+# from cogs.karaoke import KaraokeCog
+from cogs.domanda import DomandaCog
 from config import GUILD_ID
 from config import DM_CATEGORY_ID
 from utils import roles_system
@@ -29,6 +30,7 @@ from utils.bd_system import BirthdaySystem
 from utils.board_system import BoardSystem
 from utils.chess_db import ChessSystem
 from utils.debug import Logger
+from utils.domanda_system import DomandaSystem
 from utils.embed_factory import EmbedFactory
 from utils.level_system import LevelSystem
 from utils.roles_system import RoleSystem
@@ -135,6 +137,13 @@ karaoke_system = KaraokeSystem(
     database=database
 )
 
+domanda_system = DomandaSystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+
 initial_extensions = [
     "cogs.basic",
     "cogs.embed",
@@ -191,8 +200,10 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.uscite")
             await self.add_cog(MercatinoCog(self, mercatino_system))
             logger.info("Loaded extension: cogs.mercatino")
-            await self.add_cog(KaraokeCog(self, karaoke_system))
-            logger.info("Loaded extension: cogs.karaoke")
+            # await self.add_cog(KaraokeCog(self, karaoke_system))
+            # logger.info("Loaded extension: cogs.karaoke")
+            await self.add_cog(DomandaCog(self, domanda_system))
+            logger.info("Loaded extension: cogs.domanda")
         except Exception as e:
             logger.error("Failed to load extension", exc_info=e)
 

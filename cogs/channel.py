@@ -134,6 +134,29 @@ class Channel(commands.Cog):
             logger.info(f"{interaction.channel.name} set a level channel.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        @app_commands.command(name="domande", description="Set this channel as the weekly question channel.")
+        @app_commands.checks.has_role(1539463835931377765)
+        @app_commands.guilds(*GUILD_ID)
+        async def domande(self, interaction: discord.Interaction):
+            self.server_system.add_channel(interaction.guild_id, interaction.channel_id, "domande")
+            embed = EmbedFactory.create_embed(
+                title="Questions channel set",
+                description=f"You've set {interaction.channel.mention} as the weekly question channel.",
+                colour=discord.Color.green(), author="Server System", interaction=interaction)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        @app_commands.command(name="domande-staff",
+                              description="Set this channel as the staff channel for question approval.")
+        @app_commands.checks.has_role(1539463835931377765)
+        @app_commands.guilds(*GUILD_ID)
+        async def domande_staff(self, interaction: discord.Interaction):
+            self.server_system.add_channel(interaction.guild_id, interaction.channel_id, "domande_staff")
+            embed = EmbedFactory.create_embed(
+                title="Questions staff channel set",
+                description=f"You've set {interaction.channel.mention} as the staff channel for approving questions.",
+                colour=discord.Color.green(), author="Server System", interaction=interaction)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
         @app_commands.command(name="announcements", description="Set this channel as announcements channel.")
         @app_commands.guilds(*GUILD_ID)
         @app_commands.checks.has_role(1539463835931377765)
