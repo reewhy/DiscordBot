@@ -21,6 +21,7 @@ from cogs.roles import Roles
 from cogs.triggers import Triggers
 from cogs.uscite import Uscite
 from cogs.marcatino import MercatinoCog
+from cogs.karaoke import KaraokeCog
 from config import GUILD_ID
 from config import DM_CATEGORY_ID
 from utils import roles_system
@@ -35,6 +36,7 @@ from utils.server_system import ServerSystem
 from utils.triggers_system import TriggersSystem
 from utils.uscite_system import UsciteSystem
 from utils.mercatino_system import MercatinoSystem
+from utils.karaoke_system import KaraokeSystem
 from views.ticket_view import TicketView, TicketControlView, CloseDMChannelView
 
 from utils.board_system import utcnow
@@ -126,6 +128,13 @@ mercatino_system = MercatinoSystem(
     database=database
 )
 
+karaoke_system = KaraokeSystem(
+    host=host,
+    user=user,
+    password=password,
+    database=database
+)
+
 initial_extensions = [
     "cogs.basic",
     "cogs.embed",
@@ -182,6 +191,8 @@ class DiscordBot(commands.Bot):
             logger.info("Loaded extension: cogs.uscite")
             await self.add_cog(MercatinoCog(self, mercatino_system))
             logger.info("Loaded extension: cogs.mercatino")
+            await self.add_cog(KaraokeCog(self, karaoke_system))
+            logger.info("Loaded extension: cogs.karaoke")
         except Exception as e:
             logger.error("Failed to load extension", exc_info=e)
 
