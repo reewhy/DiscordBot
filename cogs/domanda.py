@@ -36,17 +36,17 @@ DEFAULT_QUESTIONS = [
     "Chi è la mamma del gruppo?",
     "Chi è più propenso a sopravvivere a un'apocalisse zombie?",
     "Chi è più propenso a diventare famoso?",
-    "Chi è più propenso a perdere il telefono ogni settimana?",
-    "Chi è più propenso a restare sveglio fino alle 5 di mattina giocando?",
     "Chi è più propenso a sbagliare chat e scrivere alla persona sbagliata?",
     "Chi è più propenso a piangere guardando un film d'animazione?",
-    "Chi è più propenso a litigare con l'arbitro in una partita tra amici?",
-    "Chi è il più testardo del server?",
     "Chi è più propenso a trasferirsi all'estero da un giorno all'altro?",
     "Chi è più propenso a vincere alla lotteria e sperperare tutto in una settimana?",
     "Chi è il più simpatico del gruppo?",
     "Chi è più propenso a rispondere ai messaggi dopo tre giorni?",
     "Chi è più propenso a farsi un tatuaggio impulsivo?",
+    "Chi è più propenso a diventare presidente del mondo?",
+    "Chi è più proprenso a vendere Semita per 5 centesimi?",
+    "Chi ha gli occhi più belli? (togliendo teo)",
+    "Chi è la persona più calma?"
 ]
 
 
