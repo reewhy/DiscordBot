@@ -24,43 +24,6 @@ class CloseDMChannelView(discord.ui.View):
     async def close_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
 
-        try:
-            # 1. Fetch all messages in the channel (from oldest to newest)
-            messages_data = []
-            async for msg in interaction.channel.history(limit=None, oldest_first=True):
-                logger.info(msg.content)
-                messages_data.append({
-                    "author": str(msg.author),
-                    "author_id": msg.author.id,
-                    "content": msg.content,
-                    "timestamp": msg.created_at.isoformat()
-                })
-
-            # 2. Convert dictionary to a formatted JSON string and load it into a BytesIO object
-            json_data = json.dumps(messages_data, indent=4, ensure_ascii=False)
-            file_bytes = io.BytesIO(json_data.encode('utf-8'))
-
-            # 3. Get the log channel
-            log_channel_id = 1538771506618695750
-            log_channel = interaction.guild.get_channel(log_channel_id)
-
-            # 4. Send the JSON file to the log channel
-            if log_channel:
-                transcript_file = discord.File(fp=file_bytes, filename=f"{interaction.channel.name}_transcript.json")
-                await log_channel.send(
-                    content=f"📑 Transcript del ticket `{interaction.channel.name}` (Chiuso da {interaction.user.mention})",
-                    file=transcript_file
-                )
-            else:
-                logger.warning(f"Log channel {log_channel_id} non trovato.")
-        except discord.HTTPException as e:
-            logger.error(f"Failed to process or delete ticket channel: {e}")
-            # In case it fails to delete, notify the user in the channel
-            try:
-                await interaction.followup.send("Errore durante la chiusura del ticket. Controlla i log.", ephemeral=True)
-            except:
-                pass
-
         # Recupera l'ID dell'utente dal topic del canale
         if interaction.channel.topic:
             user_id_match = re.search(r'ID:\s*(\d+)', interaction.channel.topic)
