@@ -9,7 +9,7 @@ def utcnow() -> datetime:
 
 class DomandaSystem(BaseDatabase):
     """
-    Stati di una domanda:  pending -> approved -> used   (oppure pending -> rejected)
+    Stati di una domanda:  pendinfg -> approved -> used   (oppure pending -> rejected)
     Stati di una settimana: open -> closed
     """
 
@@ -165,15 +165,14 @@ class DomandaSystem(BaseDatabase):
         return {r["status"]: int(r["c"]) for r in rows}
 
     def next_approved_question(self, guild_id):
-        """
-        La più vecchia domanda approvata e non ancora usata.
-        Le domande dei membri hanno la precedenza su quelle di default (author_id = 0).
-        """
+        """Una domanda approvata a caso (tra quelle non ancora usate)."""
         return self._run("""
-            SELECT * FROM domanda_questions
-            WHERE guild_id = %s AND status = 'approved'
-            ORDER BY (author_id = 0) ASC, id ASC LIMIT 1
-        """, (guild_id,), fetch="one")
+                         SELECT *
+                         FROM domanda_questions
+                         WHERE guild_id = %s
+                           AND status = 'approved'
+                         ORDER BY RAND() LIMIT 1
+                         """, (guild_id,), fetch="one")
 
     def question_exists(self, guild_id, text):
         row = self._run(
