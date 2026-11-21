@@ -21,7 +21,7 @@ TZ = ZoneInfo("Europe/Rome")
 STAFF_ROLE_ID = 1539463835931377765  # lo stesso ruolo usato nei comandi /channel
 
 # La domanda esce il lunedì alle 09:00 e si chiude la domenica alle 20:00 (ora italiana)
-START_WEEKDAY, START_HOUR = 5, 20
+START_WEEKDAY, START_HOUR = 5, 15
 END_WEEKDAY, END_HOUR = 4, 20
 
 MAX_PENDING_PER_USER = 3     # proposte in attesa contemporaneamente per utente
