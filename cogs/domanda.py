@@ -60,10 +60,24 @@ def to_naive_utc(local: dt.datetime) -> dt.datetime:
 def from_naive_utc(naive: dt.datetime) -> dt.datetime:
     return naive.replace(tzinfo=dt.timezone.utc)
 
+def window_start(now_local: dt.datetime) -> dt.datetime:
+    """Ultimo istante di inizio finestra (START_WEEKDAY, START_HOUR) <= adesso."""
+    days_back = (now_local.weekday() - START_WEEKDAY) % 7
+    start = (now_local - dt.timedelta(days=days_back)).replace(
+        hour=START_HOUR, minute=0, second=0, microsecond=0)
+    if start > now_local:
+        start -= dt.timedelta(days=7)
+    return start
+
 
 def week_key(now_local: dt.datetime) -> str:
-    iso = now_local.isocalendar()
+    iso = window_start(now_local).isocalendar()
     return f"{iso[0]}-W{iso[1]:02d}"
+
+
+def start_is_due(now_local: dt.datetime) -> bool:
+    """True se siamo dentro la finestra che va dall'inizio alla prima scadenza successiva."""
+    return now_local < next_end(window_start(now_local))
 
 
 def next_end(now_local: dt.datetime) -> dt.datetime:
@@ -75,11 +89,6 @@ def next_end(now_local: dt.datetime) -> dt.datetime:
         end += dt.timedelta(days=7)
     return end
 
-
-def start_is_due(now_local: dt.datetime) -> bool:
-    """True se siamo nella finestra tra lunedì 09:00 e domenica 20:00."""
-    cur = (now_local.weekday(), now_local.hour)
-    return (START_WEEKDAY, START_HOUR) <= cur < (END_WEEKDAY, END_HOUR)
 
 
 def is_staff(member) -> bool:
